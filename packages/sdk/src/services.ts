@@ -1,4 +1,5 @@
 // BapSdk 工厂 + 高层业务方法（面向业务，不暴露 RPC）。
+import * as fs from 'fs';
 import * as path from 'path';
 import { loadDevelop } from './develop';
 import { refreshChanges } from './refresh';
@@ -41,6 +42,8 @@ export interface BapSdk {
     gray(opts?: { requireCompile?: boolean }): Promise<void>;
     full(opts?: { ignoreErrors?: boolean }): Promise<void>;
   };
+  /** 丢弃变更：把变更还原到云端（MODIFIED/DELETED 用云端原版覆盖，ADDED 删除本地）。 */
+  discardAll(changes: Change[]): Promise<void>;
   disconnect(): Promise<void>;
 }
 
@@ -117,6 +120,38 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       },
     },
 
+    async discardAll(changes) {
+      const projectUuid = await ensureProjectUuid();
+      for (const c of changes) {
+        if (c.status === 'ADDED') {
+          // 云端无此文件 -> 删除本地即回到一致态
+          if (fs.existsSync(c.absolutePath)) fs.unlinkSync(c.absolutePath);
+          continue;
+        }
+        // MODIFIED / DELETED_LOCALLY -> 用云端原版覆盖或重建本地文件
+        let content: Buffer | string | null = null;
+        if (c.isResource) {
+          const resPath = c.relativePath.startsWith('/') ? c.relativePath : '/' + c.relativePath;
+          try {
+            const res = (await rpc.call('getResFile', projectUuid, resPath, false)) as CResFileDto | null;
+            content = res?.fileBin ? Buffer.from(res.fileBin, 'base64') : null;
+          } catch {
+            content = null;
+          }
+        } else {
+          const fullClass = c.fullClass ?? c.relativePath.replace(/\.java$/i, '').split('/').join('.');
+          try {
+            const java = (await rpc.call('getJavaCode', projectUuid, fullClass)) as CJavaCode | null;
+            content = java?.code ?? null;
+          } catch {
+            content = null;
+          }
+        }
+        if (content === null) continue; // 云端取不到 -> 不动本地，避免误删
+        fs.mkdirSync(path.dirname(c.absolutePath), { recursive: true });
+        fs.writeFileSync(c.absolutePath, content);
+      }
+    },
     publish: {
       async gray(opts) {
         const projectUuid = await ensureProjectUuid();

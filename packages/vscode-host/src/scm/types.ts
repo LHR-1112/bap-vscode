@@ -23,21 +23,56 @@ export function fileDecoFor(status: ScmStatus): FileDecoSpec | undefined {
   }
 }
 
-/** status → SCM 行内装饰（strikeThrough/faded/tooltip 的 JSON 子集，供 resource state 用）。 */
+/** status → SCM 行内装饰（iconPath 图标名 + strikeThrough/faded/tooltip，供 resource state 用）。 */
 export interface ScmDecoSpec {
+  icon?: string;          // ThemeIcon 名（codicon），如 'edit'/'add'/'circle-outline'
   strikeThrough?: boolean;
   faded?: boolean;
   tooltip?: string;
 }
 
+/** status → codicon 图标名（SCM 行内显示 M/A/D 语义图标；字母角标在文件树用 FileDecoration）。 */
+export function iconFor(status: ScmStatus): string {
+  switch (status) {
+    case 'MODIFIED':
+      return 'edit';
+    case 'ADDED':
+      return 'add';
+    case 'DELETED_LOCALLY':
+      return 'circle-outline';
+    default:
+      return 'info';
+  }
+}
+
 export function scmDecoFor(status: ScmStatus): ScmDecoSpec | undefined {
   switch (status) {
     case 'MODIFIED':
-      return { tooltip: '已修改' };
+      return { icon: 'edit', tooltip: 'M 已修改' };
     case 'ADDED':
-      return { faded: true, tooltip: '新增' };
+      return { icon: 'add', faded: true, tooltip: 'A 新增' };
     case 'DELETED_LOCALLY':
-      return { strikeThrough: true, tooltip: '已删除' };
+      return { icon: 'circle-outline', strikeThrough: true, tooltip: 'D 已删除' };
+    default:
+      return undefined;
+  }
+}
+
+/** 稳定的变更标识（绝对路径），用于暂存/取消暂存集合。 */
+export function stagedIdent(c: { absolutePath: string }): string {
+  return c.absolutePath;
+}
+
+// --- 带颜色 A/M/D 图标（git 同款 SVG 文件，位于插件 resources/scm-icons/）---
+/** SCM 行内带颜色 A/M/D 图标文件名（status-*.svg，git 同款），供 Uri.file(iconDir/name) 引用。 */
+export function statusIconFile(status: ScmStatus): string | undefined {
+  switch (status) {
+    case 'MODIFIED':
+      return 'status-modified.svg';
+    case 'ADDED':
+      return 'status-added.svg';
+    case 'DELETED_LOCALLY':
+      return 'status-deleted.svg';
     default:
       return undefined;
   }

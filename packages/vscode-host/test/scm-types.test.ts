@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   fileDecoFor,
   scmDecoFor,
+  iconFor,
+  stagedIdent,
+  statusIconFile,
   relToFullClass,
   relToResPath,
   bapOriginalUriSpec,
@@ -18,10 +21,27 @@ describe('scm/types 纯函数', () => {
   });
 
   it('scmDecoFor 行内装饰：MODIFIED tooltip、ADDED faded、DELETED strikeThrough', () => {
-    expect(scmDecoFor('MODIFIED')?.tooltip).toBe('已修改');
+    expect(scmDecoFor('MODIFIED')?.tooltip).toBe('M 已修改');
     expect(scmDecoFor('ADDED')?.faded).toBe(true);
     expect(scmDecoFor('DELETED_LOCALLY')?.strikeThrough).toBe(true);
     expect(scmDecoFor('NORMAL')).toBeUndefined();
+  });
+
+  it('iconFor 映射 M/A/D 到 codicon 图标', () => {
+    expect(iconFor('MODIFIED')).toBe('edit');
+    expect(iconFor('ADDED')).toBe('add');
+    expect(iconFor('DELETED_LOCALLY')).toBe('circle-outline');
+  });
+
+  it('stagedIdent 用绝对路径作稳定标识', () => {
+    expect(stagedIdent({ absolutePath: '/a/b.java' })).toBe('/a/b.java');
+  });
+
+  it('statusIconFile 返回 M/A/D 状态的 SVG 文件名', () => {
+    expect(statusIconFile('MODIFIED')).toBe('status-modified.svg');
+    expect(statusIconFile('ADDED')).toBe('status-added.svg');
+    expect(statusIconFile('DELETED_LOCALLY')).toBe('status-deleted.svg');
+    expect(statusIconFile('NORMAL')).toBeUndefined();
   });
 
   it('relToFullClass 剥 java 扩展名转包路径', () => {
