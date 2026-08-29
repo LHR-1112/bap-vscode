@@ -68,11 +68,13 @@ describe('encodeHeader / decodeHeader', () => {
 });
 
 describe('encode / decode (full frame)', () => {
-  it('encodes a request with empty body (no serializer)', () => {
+  it('encodes a request frame with serialized body', () => {
     const req = new RpcRequest('com.foo.X', 'ping');
     const frame = encode(req);
-    expect(frame.length).toBe(CRPC_HEADER_LENGTH);
+    // 13 字节 header + Java 序列化 body（>=4 字节流头）
     expect(frame[4]).toBe(MessageType.REQ);
+    expect(frame.length).toBeGreaterThan(13);
+    expect(frame.subarray(13, 17).toString('hex')).toBe('aced0005');
   });
 
   it('decodes a golden frame with a body', () => {
