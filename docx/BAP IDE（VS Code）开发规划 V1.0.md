@@ -7,7 +7,8 @@
 > - **Java 侧只暴露「原子化能力」**：即 `CJavaCenterIntf` 的方法集（连接/会话 + 原子方法转发），不含 MD5 对比、CommitPackage 组装、状态判断等业务逻辑——那些归 TS 侧 SDK/SCM。
 > - **新增「SCM ↔ 原子化能力」桥接设计**：VS Code 原生 SCM 视图 ↔ BAP 原子能力，经 `bap-sdk` 中间层打通（基线 = 云端）。
 > - **参考实现为生产级 IDEA 插件**：`/Users/lihongrui/IdeaProjects/PluginDemo`（`com.bap.dev.BapRpcClient`、`BapConnectionManager`、`ProjectRefresher`、`BapFileStatusService` 等）。
-> - **Java 运行时依赖用户已装的 JDK**（BAP 开发者通常已有），插件只 bundle 几百 KB 的 jar，不捎带 JRE。
+> - **Java 运行时依赖用户已装的 JDK**（BAP 开发者通常已有）。插件需 bundle 官方 CRPC 运行时的 100+ 个 jar（netty/ecj/tcmcat 等），
+>   vsix 体积因此增加明显（约数十 MB），但这是走「Java 桥」路线能对 Server 做完整编解码/序列化的固有成本；不捎带 JRE。
 > - **结构去重**：原「§六 RPC 工作拆分」与「开发阶段」内容重复，已将 §六 删除、其四个子步骤并入当前 §七（开发阶段）的第一阶段（RPC Runtime）作为展开；阶段进度只保留一套。
 > - 保留 V1.1 的其他定位：完整 VS Code 插件、VS Code 原生 UI、一个 MCP tool ↔ 一个 `bapIde.*` 命令。
 
@@ -78,7 +79,8 @@ BAP Server（ws://<host>:<port>）
 
 - **Java 侧**：直接用 `com.leavay.nio.crpc` 连 Server，持有 WebSocket 长连接 + 心跳 + 会话上下文，序列化完全交给官方实现（协议 100% 正确）。
 - **TS 侧**：只通过 `stdin/stdout` 用 JSON 发 `{ method, params }`，收 `{ result | error }`。TS 拿到的是普通 JSON，处理方式接近 HTTP REST。
-- **Java 运行时**：依赖用户已装的 JDK（BAP 开发者通常已有）。插件只 bundle 几百 KB 的 jar，不捎带 JRE；检测不到 Java 时给出明确安装提示。
+- **Java 运行时**：依赖用户已装的 JDK（BAP 开发者通常已有）。插件需 bundle 官方 CRPC 的 100+ 个运行时 jar（netty/ecj/tcmcat 等）；
+  vsix 体积因此增加（约数十 MB，不做 fat-jar 合并、用 classpath 通配符以规避 META-INF 冲突）。检测不到 Java 时给出明确安装提示。
 
 取舍：代价是**依赖 JVM**、需管理桥进程生命周期；换来的是**协议零风险、开发量大幅下降、维护容易**。
 之前用 TS 复刻的 Connection/Codec/Serializer 保留为「不依赖 JVM 的降级方案」，不作主路径。

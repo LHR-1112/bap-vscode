@@ -1,0 +1,11 @@
+{
+  "name": "@bap/java-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BAP Java 桥：复用官方 com.leavay.nio.crpc 连 BAP Server，TS 经 stdio JSON 调用（只暴露原子化能力）",
+  "scripts": {
+    "sync-jars": "bash scripts/sync-jars.sh",
+    "build:java": "bash scripts/build.sh",
+    "build": "npm run sync-jars && npm run build:java"
+  }
+}

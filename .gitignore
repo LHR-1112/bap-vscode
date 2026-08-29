@@ -4,3 +4,9 @@ out/
 *.vsix
 *.log
 .DS_Store
+
+# Java 桥构建产物（jar 是第三方二进制，不纳入 git）
+packages/java-bridge/lib/
+packages/java-bridge/out/
+packages/java-bridge/dist/
+apps/vscode/assets/

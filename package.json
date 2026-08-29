@@ -13,6 +13,7 @@
     "watch": "npm run watch -w bap-ide-vscode",
     "build": "npm run build -w bap-ide-vscode",
     "package": "npm run package -w bap-ide-vscode",
+    "build:bridge": "npm run build -w @bap/java-bridge",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

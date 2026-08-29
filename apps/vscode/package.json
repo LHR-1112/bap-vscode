@@ -27,7 +27,8 @@
   "scripts": {
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
-    "build": "node esbuild.js --production",
+    "build": "npm run build:bridge && node scripts/stage-bridge.js && node esbuild.js --production",
+    "build:bridge": "npm run build -w @bap/java-bridge",
     "vscode:prepublish": "npm run build",
     "package": "vsce package"
   },

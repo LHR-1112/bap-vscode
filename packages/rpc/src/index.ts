@@ -1,6 +1,98 @@
-// @bap/rpc —— RPC 通信面（第一层）。
-// 采用「Java 桥」路线：TS 不直接连 WebSocket、不做字节编解码/序列化，
-// 而是经 stdin/stdout JSON 协议与 Java 桥进程通信，由 Java 侧复用官方 com.leavay.nio.crpc。
-//
-// 之前的 TS 复刻实现（Connection / Codec / Serializer / RpcClient）已移除，
-// 待 Java 桥阶段（见规划 §六 第一阶段）重新实现为「子进程 + JSON」通信面。
+// @bap/rpc —— Java 桥 TS 通信面。
+// RpcClient 门面：懒启动 bridge 子进程，提供 connect/request/call/ping/disconnect/close。
+import { BridgeProcess, BridgeRpcError } from './transport';
+import type { BridgeLaunchConfig, JsonValue, SessionDto } from './types';
+
+export { BridgeProcess, BridgeRpcError, resolveJavaBin } from './transport';
+export type {
+  JsonValue,
+  BridgeMethod,
+  RpcRequest,
+  RpcResponse,
+  RpcError,
+  BridgeLaunchConfig,
+  SessionDto,
+  PendingEntry,
+  RpcClientEvents,
+} from './types';
+
+export interface RpcClientOptions {
+  launch: BridgeLaunchConfig;
+  /** connect 专用超时（毫秒，较长的默认，给 ECJ 编译代理 + 首次握手留时间），默认 60_000。 */
+  connectTimeoutMs?: number;
+}
+
+export class RpcClient {
+  private _proc: BridgeProcess;
+  private _connectTimeoutMs: number;
+  private _exitHandlers: Array<(code: number | null) => void> = [];
+
+  constructor(options: RpcClientOptions) {
+    this._proc = new BridgeProcess(options.launch);
+    this._connectTimeoutMs = options.connectTimeoutMs ?? 60_000;
+    this._proc.on('exit', (code) => {
+      for (const h of this._exitHandlers) h(code);
+    });
+  }
+
+  get active(): boolean {
+    return this._proc.active;
+  }
+
+  /** 懒启动：首次调用会 spawn Java 桥。 */
+  private ensureStarted(): void {
+    if (!this._proc.active) this._proc.start();
+  }
+
+  /** 连接并登录（返回会话），若失败 reject。 */
+  async connect(uri: string, user: string, pwd: string): Promise<SessionDto> {
+    this.ensureStarted();
+    const result = await this._proc.request('connect', [uri, user, pwd], this._connectTimeoutMs);
+    const obj = (result ?? {}) as { connected?: boolean; session?: SessionDto };
+    if (!obj.connected) throw new BridgeRpcError('CONNECT_FAILED', 'bridge connect returned not connected');
+    return obj.session ?? {};
+  }
+
+  /** 发送任意请求。 */
+  request(method: Parameters<BridgeProcess['request']>[0], params: JsonValue[], timeoutMs?: number): Promise<JsonValue> {
+    this.ensureStarted();
+    return this._proc.request(method, params, timeoutMs);
+  }
+
+  /** 原子方法转发：call("getAllProjects") 等。 */
+  call<T = JsonValue>(method: string, ...args: JsonValue[]): Promise<T> {
+    this.ensureStarted();
+    return this._proc.request('call', [method, args]) as Promise<T>;
+  }
+
+  ping(): Promise<boolean> {
+    this.ensureStarted();
+    return this._proc.request('ping', []) as Promise<boolean>;
+  }
+
+  /** 断开连接（Java 桥进程不退出，可复用）。 */
+  async disconnect(): Promise<void> {
+    await this._proc.request('disconnect', []);
+  }
+
+  /** 彻底关闭：发 shutdown + 兜底 kill。 */
+  async close(): Promise<void> {
+    if (this._proc.active) {
+      try {
+        await this._proc.request('shutdown', [], 3000);
+      } catch {
+        // 可能已退出
+      }
+    }
+    this._proc.kill();
+  }
+
+  onExit(cb: (code: number | null) => void): void {
+    this._exitHandlers.push(cb);
+  }
+}
+
+/** 便捷工厂。 */
+export function createRpcClient(options: RpcClientOptions): RpcClient {
+  return new RpcClient(options);
+}
