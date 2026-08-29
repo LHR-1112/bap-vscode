@@ -2,7 +2,10 @@
   "name": "@bap/sdk",
   "version": "0.1.0",
   "private": true,
-  "description": "BAP SDK（面向业务，不暴露 RPC）",
+  "description": "BAP SDK（面向业务，不暴露 RPC：读 .develop / refresh / commit / 高层服务）",
   "main": "src/index.ts",
-  "types": "src/index.ts"
+  "types": "src/index.ts",
+  "dependencies": {
+    "@bap/rpc": "0.1.0"
+  }
 }
