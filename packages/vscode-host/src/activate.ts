@@ -69,6 +69,22 @@ export function activateScm(
     }
   };
 
+  /** SCM context 菜单（右键/内联单个 resource）传给命令的是 resourceUri 或 resource state，而非 Change。
+   *  这里统一解析回 provider 里的 Change（按 fsPath 精确匹配）。 */
+  function resolveChange(arg: unknown): Change | undefined {
+    if (!arg || typeof arg !== 'object') return undefined;
+    const a = arg as { fsPath?: unknown; resourceUri?: { fsPath?: unknown }; absolutePath?: unknown };
+    let fsPath: string | undefined;
+    if (typeof a.fsPath === 'string') fsPath = a.fsPath;
+    else if (a.resourceUri && typeof (a.resourceUri as { fsPath?: unknown }).fsPath === 'string') {
+      fsPath = (a.resourceUri as { fsPath: string }).fsPath;
+    } else if (typeof a.absolutePath === 'string') {
+      fsPath = a.absolutePath;
+    }
+    if (!fsPath) return undefined;
+    return bapScm.getChangeByPath(fsPath);
+  }
+
   // --- 命令 ---
   subscriptions.push(
     vscode.commands.registerCommand('bapIde.scm.refresh', async () =>
@@ -98,24 +114,27 @@ export function activateScm(
         void vscode.window.setStatusBarMessage('BAP: 已发布', 3000);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.openDiff', async (change?: Change) =>
+    vscode.commands.registerCommand('bapIde.scm.openDiff', async (arg?: unknown) =>
       safe('bapIde.scm.openDiff', async () => {
-        log.debug(`openDiff: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(无)'}`);
-        if (!change?.absolutePath) return;
+        const change = resolveChange(arg);
+        log.debug(`openDiff: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
+        if (!change) return;
         await openDiff(change, workspaceRoot);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.stage', async (change?: Change) =>
+    vscode.commands.registerCommand('bapIde.scm.stage', async (arg?: unknown) =>
       safe('bapIde.scm.stage', async () => {
-        log.debug(`stage: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(无)'}`);
-        if (!change?.absolutePath) return;
+        const change = resolveChange(arg);
+        log.debug(`stage: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
+        if (!change) return;
         bapScm.stage(change);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.unstage', async (change?: Change) =>
+    vscode.commands.registerCommand('bapIde.scm.unstage', async (arg?: unknown) =>
       safe('bapIde.scm.unstage', async () => {
-        log.debug(`unstage: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(无)'}`);
-        if (!change?.absolutePath) return;
+        const change = resolveChange(arg);
+        log.debug(`unstage: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
+        if (!change) return;
         bapScm.unstage(change);
       }),
     ),

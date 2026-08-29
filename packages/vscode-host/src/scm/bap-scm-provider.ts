@@ -11,6 +11,7 @@ export interface BapScmProviderHandle {
   refresh(): Promise<Change[]>;
   getChanges(): Change[];
   getUnstaged(): Change[];
+  getChangeByPath(fsPath: string): Change | undefined;
   getDecorations(): BapFileDecorationMap;
   stage(change: Change): void;
   unstage(change: Change): void;
@@ -147,6 +148,12 @@ export function createBapScmProvider(
   /** 「更改」组：未暂存的变更。 */
   const unstagedChanges = (): Change[] => lastChanges.filter((c) => !stagedPaths.has(stagedIdent(c)));
 
+  /** 按本地绝对路径解析变更（SCM context 菜单把 resourceUri 而非 Change 传给命令）。
+   *  因为 toResourceState 里 resourceUri = Uri.file(c.absolutePath)，故可用 fsPath 精确匹配。 */
+  function getChangeByPath(fsPath: string): Change | undefined {
+    return lastChanges.find((c) => c.absolutePath === fsPath);
+  }
+
   /** 暂存「更改」组所有未暂存变更（stageAll 按钮）。 */
   function stageAll(): void {
     for (const c of unstagedChanges()) {
@@ -210,6 +217,7 @@ export function createBapScmProvider(
     refresh,
     getChanges: () => lastChanges,
     getUnstaged: () => unstagedChanges(),
+    getChangeByPath,
     getDecorations: () => decoMap,
     commit,
     stage,
