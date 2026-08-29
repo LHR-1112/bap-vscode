@@ -13,7 +13,7 @@ async function main() {
     platform: 'node',
     target: 'node18',
     outfile: 'dist/extension.js',
-    external: ['vscode'],
+    external: ['vscode', 'bufferutil', 'utf-8-validate'],
     sourcemap: !production,
     minify: production,
   });

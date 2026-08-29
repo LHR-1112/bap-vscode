@@ -4,5 +4,11 @@
   "private": true,
   "description": "BAP RPC Runtime（WebSocket / 协议 / 序列化）",
   "main": "src/index.ts",
-  "types": "src/index.ts"
+  "types": "src/index.ts",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  }
 }

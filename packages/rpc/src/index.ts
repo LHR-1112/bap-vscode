@@ -1,8 +1,19 @@
 // @bap/rpc —— RPC Runtime（第一层）。
 // 第一阶段：Connection（WebSocket / 重连 / Ping / Timeout）。
+// 后续阶段：Codec（Header 编解码）、Serializer（Java 序列化兼容）、RpcClient。
 
-/** RPC 连接的生命周期接口（占位，待第一阶段实现）。 */
-export interface RpcConnection {
-  connect(): Promise<void>;
-  close(): void;
-}
+export { RpcConnection } from './connection/connection';
+export { ConnectionState } from './connection/types';
+export { ConnectionError, ConnectTimeoutError, HeartbeatTimeoutError } from './connection/errors';
+export { Backoff } from './connection/backoff';
+export { HeartbeatManager } from './connection/heartbeat';
+export { TypedEmitter } from './connection/emitter';
+export { normalizeOptions, DEFAULT_CONNECTION_OPTIONS } from './connection/defaults';
+
+export type {
+  ConnectionOptions,
+  ResolvedConnectionOptions,
+  ConnectionEventMap,
+  CloseInfo,
+  Logger,
+} from './connection/types';
