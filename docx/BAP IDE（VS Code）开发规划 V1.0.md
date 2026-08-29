@@ -8,6 +8,7 @@
 > - **新增「SCM ↔ 原子化能力」桥接设计**：VS Code 原生 SCM 视图 ↔ BAP 原子能力，经 `bap-sdk` 中间层打通（基线 = 云端）。
 > - **参考实现为生产级 IDEA 插件**：`/Users/lihongrui/IdeaProjects/PluginDemo`（`com.bap.dev.BapRpcClient`、`BapConnectionManager`、`ProjectRefresher`、`BapFileStatusService` 等）。
 > - **Java 运行时依赖用户已装的 JDK**（BAP 开发者通常已有），插件只 bundle 几百 KB 的 jar，不捎带 JRE。
+> - **结构去重**：原「§六 RPC 工作拆分」与「开发阶段」内容重复，已将 §六 删除、其四个子步骤并入当前 §七（开发阶段）的第一阶段（RPC Runtime）作为展开；阶段进度只保留一套。
 > - 保留 V1.1 的其他定位：完整 VS Code 插件、VS Code 原生 UI、一个 MCP tool ↔ 一个 `bapIde.*` 命令。
 
 ---
@@ -524,50 +525,9 @@ BAP 无 Git HEAD，**「云端」就是唯一真相源**。对应到 VS Code SCM
 
 ---
 
-# 六、RPC 工作拆分（Java 桥，原子化转发）
-
-建议按「先原子、后桥接」的顺序完成：
-
-## 第一阶段：Java 桥骨架（原子化）+ TS 通信面
-
-- Java 侧：`BapRpcClient`（connect/login/shutdown/ping）+ `call(method, args)` 反射转发到 `CJavaCenterIntf`
-- TS 侧：子进程拉起 + `stdin/stdout` JSON-lines 协议（请求/响应）
-- 验证：`rpc.call("login", [user, pwd])` 经 Java 桥登录成功（拿到会话句柄）
-- **不做**：MD5 对比、CommitPackage 组装、状态判断（均留给 TS）
-
-无需 TS 复刻字节协议。
-
 ---
 
-## 第二阶段：TS SDK 业务层（负责「原子化之外」逻辑）
-
-- TS 侧封装 `sdk.project.list()` / `sdk.code.save()` / `sdk.publish.gray()`
-- TS 侧实现：读 `.develop` 配置、MD5 对比（refresh 变更计算）、组装 `CommitPackage` JSON
-- Java 桥保持透明：只转发 `call(method, args)`
-- 验证：`refresh()` 能算出 M/A/D 状态集；`commitCode` 能提交本地变更
-
----
-
-## 第三阶段：SCM 桥接
-
-- `vscode.scm.createSourceControl` + SCM 资源组映射 M/A/D
-- `originalUri` ← 云端原版（`getJavaCode`/`getResFile` 写临时文件）driving 行内 diff
-- 提交（Commit）→ `commitCode`；发布（Publish）→ `rebuildAll`+`exportProject2Plugin`
-- 验证：VS Code SCM 视图能展示云端基线差分，文件能提交/发布/对比/还原
-
----
-
-## 第四阶段：进程生命周期与稳定
-
-- Java 桥启动/关闭/崩溃重启
-- 连接、心跳、超时由 Java 侧官方实现
-- 验证：进程异常后能重启，连接能重连
-
-至此 Runtime 完成（以 Java 桥形式）。
-
----
-
-# 七、VS Code 插件规划
+# 六、VS Code 插件规划
 
 ## 代码变更主界面（SCM）
 
@@ -633,7 +593,9 @@ BAP: Commit
 
 ---
 
-# 八、开发阶段
+# 七、开发阶段
+
+> 阶段进度总览。RPC 相关（第一阶段）的细分子步骤见下方展开。
 
 ## 第一阶段
 
@@ -650,6 +612,15 @@ sdk.login()
 经 Java 桥（子进程 + JSON IPC）能够正常登录，拿到会话句柄。
 
 此阶段无需任何 UI。
+
+**RPC 细分（按「先原子、后桥接」完成）**：
+
+1. **Java 桥骨架（原子化）+ TS 通信面**：Java 侧 `BapRpcClient`（connect/login/shutdown/ping）+ `call(method, args)` 反射转发到 `CJavaCenterIntf`；TS 侧子进程拉起 + `stdin/stdout` JSON-lines 协议。验证 `rpc.call("login",[user,pwd])` 登录成功。不做 MD5 对比/CommitPackage 组装/状态判断（留给 TS）。
+2. **TS SDK 业务层（原子化之外逻辑）**：TS 封装 `sdk.project.list()`/`sdk.code.save()`/`sdk.publish.gray()`；实现读 `.develop`、MD5 对比（refresh 变更计算）、组装 `CommitPackage` JSON。Java 桥保持透明。验证 `refresh()` 算出 M/A/D 状态集、`commitCode` 能提交本地变更。
+3. **SCM 桥接**：`vscode.scm.createSourceControl` + SCM 资源组映射 M/A/D；`originalUri` ← 云端原版（`getJavaCode`/`getResFile` 写临时文件）driving 行内 diff；提交→`commitCode`，发布→`rebuildAll`+`exportProject2Plugin`。验证 SCM 视图能展示云端基线差分，文件能提交/发布/对比/还原。
+4. **进程生命周期与稳定**：Java 桥启动/关闭/崩溃重启；连接、心跳、超时由 Java 侧官方实现。验证进程异常后能重启，连接能重连。
+
+至此 Runtime 完成（以 Java 桥形式）。
 
 ---
 
@@ -752,7 +723,7 @@ MCP 集成。
 
 ---
 
-# 九、长期规划
+# 八、长期规划
 
 BAP IDE 就是一个**完整的 VS Code 插件**，不再规划多宿主。
 
