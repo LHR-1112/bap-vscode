@@ -1,0 +1,8 @@
+{
+  "name": "@bap/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BAP SDK（面向业务，不暴露 RPC）",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

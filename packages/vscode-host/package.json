@@ -1,0 +1,8 @@
+{
+  "name": "@bap/vscode-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BAP VS Code 宿主（SCM / TreeView / Command / StatusBar / MCP）",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

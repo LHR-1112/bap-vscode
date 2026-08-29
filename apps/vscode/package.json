@@ -1,0 +1,43 @@
+{
+  "name": "bap-ide-vscode",
+  "displayName": "BAP IDE",
+  "description": "面向 BAP 云工程的 VS Code 插件",
+  "version": "0.1.0",
+  "publisher": "bap",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "bapIde.showVersion",
+        "title": "BAP: Show Version"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "build": "node esbuild.js --production",
+    "vscode:prepublish": "npm run build",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@bap/core": "0.1.0",
+    "@bap/rpc": "0.1.0",
+    "@bap/sdk": "0.1.0",
+    "@bap/vscode-host": "0.1.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0"
+  }
+}

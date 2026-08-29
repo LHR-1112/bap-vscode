@@ -1,0 +1,22 @@
+{
+  "name": "bap-ide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BAP IDE — 面向 BAP 云工程的 VS Code 插件（monorepo）",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "compile": "npm run compile -w bap-ide-vscode",
+    "watch": "npm run watch -w bap-ide-vscode",
+    "build": "npm run build -w bap-ide-vscode",
+    "package": "npm run package -w bap-ide-vscode",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.9.0"
+  }
+}
