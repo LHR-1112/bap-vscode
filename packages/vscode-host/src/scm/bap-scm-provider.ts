@@ -4,19 +4,17 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import type { BapSdk, Change } from '@bap/sdk';
-import { scmDecoFor, stagedIdent, statusIconFile } from './types';
+import { scmDecoFor, statusIconFile } from './types';
 
 export interface BapScmProviderHandle {
   sourceControl: vscode.SourceControl;
   refresh(): Promise<Change[]>;
   getChanges(): Change[];
-  getUnstaged(): Change[];
   getChangeByPath(fsPath: string): Change | undefined;
   getDecorations(): BapFileDecorationMap;
-  stage(change: Change): void;
-  unstage(change: Change): void;
-  stageAll(): void;
-  discardAll(): Promise<void>;
+  commitFile(change: Change, comment?: string): Promise<void>;
+  updateFile(change: Change): Promise<void>;
+  updateAll(): Promise<void>;
   commit(comment?: string): Promise<void>;
   dispose(): void;
 }
@@ -41,14 +39,13 @@ export function createBapScmProvider(
   const scc = vscode.scm;
   const sc = scc.createSourceControl('bap', 'BAP', vscode.Uri.file(workspaceRoot));
 
-  // git 风格两组：更改（未暂存）+ 已暂存的更改（用户勾选要提交的）
-  const changesGroup = sc.createResourceGroup('changes', '更改');
-  const stagedGroup = sc.createResourceGroup('staged', '已暂存的更改');
-  changesGroup.hideWhenEmpty = true;
-  stagedGroup.hideWhenEmpty = true;
-
-  // 用户暂存过的绝对路径集合（refresh 时保留；status 变 NORMAL 自动清除）
-  const stagedPaths = new Set<string>();
+  // git "files changed" 风格三组：按文件状态分组（新增/更改/删除）
+  const groups = {
+    added: sc.createResourceGroup('added', '新增'),
+    modified: sc.createResourceGroup('modified', '更改'),
+    deleted: sc.createResourceGroup('deleted', '删除'),
+  };
+  (Object.values(groups)).forEach((g) => (g.hideWhenEmpty = true));
 
   let changes: Change[] = [];
   const decoMap: BapFileDecorationMap = new Map();
@@ -92,17 +89,16 @@ export function createBapScmProvider(
     const dirty = list.filter((c) => c.status !== 'NORMAL');
     lastChanges = dirty;
 
-    // NORMAL 的（曾暂存但已一致）从暂存集合清除
-    for (const c of list) {
-      if (c.status === 'NORMAL') stagedPaths.delete(stagedIdent(c));
-    }
-
-    // 按「是否已暂存」分成两组；A/M/D 状态靠 resource state 的图标/tooltip 及文件树角标区分
-    const toStaged = dirty.filter((c) => stagedPaths.has(stagedIdent(c)));
-    const toChanges = dirty.filter((c) => !stagedPaths.has(stagedIdent(c)));
-
-    stagedGroup.resourceStates = toStaged.map((c) => toResourceState(c, workspaceRoot, true));
-    changesGroup.resourceStates = toChanges.map((c) => toResourceState(c, workspaceRoot, false));
+    // 按文件状态分成三组（新增/更改/删除）；A/M/D 之外不再有暂存/未暂存维度
+    groups.added.resourceStates = dirty
+      .filter((c) => c.status === 'ADDED')
+      .map((c) => toResourceState(c));
+    groups.modified.resourceStates = dirty
+      .filter((c) => c.status === 'MODIFIED')
+      .map((c) => toResourceState(c));
+    groups.deleted.resourceStates = dirty
+      .filter((c) => c.status === 'DELETED_LOCALLY')
+      .map((c) => toResourceState(c));
     sc.count = dirty.length;
 
     // 更新文件装饰表
@@ -112,7 +108,7 @@ export function createBapScmProvider(
     }
   }
 
-  function toResourceState(c: Change, root: string, staged: boolean): vscode.SourceControlResourceState {
+  function toResourceState(c: Change): vscode.SourceControlResourceState {
     const deco = scmDecoFor(c.status);
     // git 同款：带颜色 A/M/D 用插件 resources/scm-icons/ 下的 SVG 文件（Uri.file 引用，不用 data-URI）。
     const iconFile = statusIconFile(c.status);
@@ -129,24 +125,9 @@ export function createBapScmProvider(
       resourceUri: vscode.Uri.file(c.absolutePath),
       command: { command: 'bapIde.scm.openDiff', title: '打开 Diff', arguments: [c] },
       decorations,
-      // contextValue 专用于「是否已暂存」，供右键菜单 when 区分 stage/unstage；
       // A/M/D 由 iconPath 图标表达，不占用 contextValue。
-      contextValue: staged ? 'staged' : 'unstaged',
     };
   }
-
-  function stage(change: Change): void {
-    stagedPaths.add(stagedIdent(change));
-    applyToGroups(changes);
-  }
-
-  function unstage(change: Change): void {
-    stagedPaths.delete(stagedIdent(change));
-    applyToGroups(changes);
-  }
-
-  /** 「更改」组：未暂存的变更。 */
-  const unstagedChanges = (): Change[] => lastChanges.filter((c) => !stagedPaths.has(stagedIdent(c)));
 
   /** 按本地绝对路径解析变更（SCM context 菜单把 resourceUri 而非 Change 传给命令）。
    *  因为 toResourceState 里 resourceUri = Uri.file(c.absolutePath)，故可用 fsPath 精确匹配。 */
@@ -154,17 +135,21 @@ export function createBapScmProvider(
     return lastChanges.find((c) => c.absolutePath === fsPath);
   }
 
-  /** 暂存「更改」组所有未暂存变更（stageAll 按钮）。 */
-  function stageAll(): void {
-    for (const c of unstagedChanges()) {
-      stagedPaths.add(stagedIdent(c));
-    }
-    applyToGroups(changes);
+  /** 提交单个文件到云端。 */
+  async function commitFile(change: Change, comment = ''): Promise<void> {
+    await sdk.code.saveChanges([change], comment);
+    await refresh();
   }
 
-  /** 放弃「更改」组所有未暂存变更（discardAll 按钮）：从云端取原版覆盖本地，再刷新。 */
-  async function discardAll(): Promise<void> {
-    await sdk.discardAll(unstagedChanges()); // 只还原未暂存，不误伤已暂存待提交的文件
+  /** 更新单个文件：从云端拉取最新版覆盖本地（新增文件删除本地）。 */
+  async function updateFile(change: Change): Promise<void> {
+    await sdk.discardAll([change]);
+    await refresh();
+  }
+
+  /** 一键更新所有变更：从云端取最新版覆盖本地/新增删除，再刷新。 */
+  async function updateAll(): Promise<void> {
+    await sdk.discardAll(lastChanges);
     await refresh();
   }
 
@@ -200,15 +185,13 @@ export function createBapScmProvider(
   }
 
   async function commit(comment = ''): Promise<void> {
-    // 只提交「已暂存」的变更；暂存区为空则提示，避免误提交全部。
-    const toCommit = lastChanges.filter((c) => stagedPaths.has(stagedIdent(c)));
+    // 无暂存概念：提交所有变更（新增/更改/删除）。
+    const toCommit = lastChanges;
     if (toCommit.length === 0) {
-      void vscode.window.showWarningMessage('BAP: 没有已暂存的更改。请先在 SCM 里暂存要提交的文件。');
+      void vscode.window.showWarningMessage('BAP: 没有更改可提交。');
       return;
     }
     await sdk.code.saveChanges(toCommit, comment);
-    // 提交后这些文件回到一致（NORMAL），从暂存集合清除
-    for (const c of toCommit) stagedPaths.delete(stagedIdent(c));
     await refresh();
   }
 
@@ -216,19 +199,16 @@ export function createBapScmProvider(
     sourceControl: sc,
     refresh,
     getChanges: () => lastChanges,
-    getUnstaged: () => unstagedChanges(),
     getChangeByPath,
     getDecorations: () => decoMap,
+    commitFile,
+    updateFile,
+    updateAll,
     commit,
-    stage,
-    unstage,
-    stageAll,
-    discardAll,
     dispose() {
       for (const s of subscriptions) s.dispose();
       if (debounceTimer) clearTimeout(debounceTimer);
-      changesGroup.dispose();
-      stagedGroup.dispose();
+      for (const g of Object.values(groups)) g.dispose();
       sc.dispose();
     },
   };

@@ -3,7 +3,6 @@ import {
   fileDecoFor,
   scmDecoFor,
   iconFor,
-  stagedIdent,
   statusIconFile,
   relToFullClass,
   relToResPath,
@@ -31,10 +30,6 @@ describe('scm/types 纯函数', () => {
     expect(iconFor('MODIFIED')).toBe('edit');
     expect(iconFor('ADDED')).toBe('add');
     expect(iconFor('DELETED_LOCALLY')).toBe('circle-outline');
-  });
-
-  it('stagedIdent 用绝对路径作稳定标识', () => {
-    expect(stagedIdent({ absolutePath: '/a/b.java' })).toBe('/a/b.java');
   });
 
   it('statusIconFile 返回 M/A/D 状态的 SVG 文件名', () => {

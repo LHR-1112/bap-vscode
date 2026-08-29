@@ -42,14 +42,14 @@
         "title": "打开 Diff"
       },
       {
-        "command": "bapIde.scm.stage",
-        "title": "暂存",
-        "icon": "$(add)"
+        "command": "bapIde.scm.commitFile",
+        "title": "提交该文件",
+        "icon": "$(check)"
       },
       {
-        "command": "bapIde.scm.unstage",
-        "title": "取消暂存",
-        "icon": "$(remove)"
+        "command": "bapIde.scm.updateFile",
+        "title": "更新该文件",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "bapIde.scm.openAllChanges",
@@ -57,14 +57,9 @@
         "icon": "$(diff-multiple)"
       },
       {
-        "command": "bapIde.scm.stageAll",
-        "title": "暂存所有更改",
-        "icon": "$(add)"
-      },
-      {
-        "command": "bapIde.scm.discardAll",
-        "title": "放弃所有更改",
-        "icon": "$(discard)"
+        "command": "bapIde.scm.updateAll",
+        "title": "更新所有",
+        "icon": "$(cloud-download)"
       }
     ],
     "menus": {
@@ -76,6 +71,11 @@
         },
         {
           "command": "bapIde.scm.commit",
+          "group": "navigation",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.updateAll",
           "group": "navigation",
           "when": "scmProvider == bap"
         },
@@ -92,31 +92,21 @@
           "when": "scmProvider == bap"
         },
         {
-          "command": "bapIde.scm.stage",
-          "group": "1_modification@1",
-          "when": "scmProvider == bap && scmResourceGroup == changes"
+          "command": "bapIde.scm.commitFile",
+          "group": "inline@1",
+          "when": "scmProvider == bap"
         },
         {
-          "command": "bapIde.scm.unstage",
-          "group": "1_modification@1",
-          "when": "scmProvider == bap && scmResourceGroup == staged"
+          "command": "bapIde.scm.updateFile",
+          "group": "inline@2",
+          "when": "scmProvider == bap"
         }
       ],
       "scm/resourceGroup/context": [
         {
           "command": "bapIde.scm.openAllChanges",
           "group": "inline@1",
-          "when": "scmProvider == bap && scmResourceGroup == changes"
-        },
-        {
-          "command": "bapIde.scm.stageAll",
-          "group": "inline@2",
-          "when": "scmProvider == bap && scmResourceGroup == changes"
-        },
-        {
-          "command": "bapIde.scm.discardAll",
-          "group": "inline@3",
-          "when": "scmProvider == bap && scmResourceGroup == changes"
+          "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
         }
       ]
     }

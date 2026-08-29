@@ -122,28 +122,32 @@ export function activateScm(
         await openDiff(change, workspaceRoot);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.stage', async (arg?: unknown) =>
-      safe('bapIde.scm.stage', async () => {
+    vscode.commands.registerCommand('bapIde.scm.commitFile', async (arg?: unknown) =>
+      safe('bapIde.scm.commitFile', async () => {
         const change = resolveChange(arg);
-        log.debug(`stage: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
+        log.debug(`commitFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
-        bapScm.stage(change);
+        const comment = bapScm.sourceControl.inputBox.value || '';
+        await bapScm.commitFile(change, comment);
+        bapScm.sourceControl.inputBox.value = '';
+        void vscode.window.setStatusBarMessage('BAP: 已提交该文件', 3000);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.unstage', async (arg?: unknown) =>
-      safe('bapIde.scm.unstage', async () => {
+    vscode.commands.registerCommand('bapIde.scm.updateFile', async (arg?: unknown) =>
+      safe('bapIde.scm.updateFile', async () => {
         const change = resolveChange(arg);
-        log.debug(`unstage: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
+        log.debug(`updateFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
-        bapScm.unstage(change);
+        await bapScm.updateFile(change);
+        void vscode.window.setStatusBarMessage('BAP: 已从云端更新该文件', 3000);
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.openAllChanges', async () =>
       safe('bapIde.scm.openAllChanges', async () => {
-        const list = bapScm.getUnstaged();
+        const list = bapScm.getChanges();
         log.debug(`openAllChanges: ${list.length} 个`);
         if (list.length === 0) {
-          void vscode.window.showInformationMessage('BAP: 没有未暂存的更改');
+          void vscode.window.showInformationMessage('BAP: 没有更改');
           return;
         }
         // 逐份打开「更改」组每个文件的 diff（左=云端原版，右=本地）
@@ -152,24 +156,17 @@ export function activateScm(
         }
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.stageAll', async () =>
-      safe('bapIde.scm.stageAll', async () => {
-        log.debug('触发 stageAll');
-        bapScm.stageAll();
-        void vscode.window.setStatusBarMessage('BAP: 已暂存全部更改', 3000);
-      }),
-    ),
-    vscode.commands.registerCommand('bapIde.scm.discardAll', async () =>
-      safe('bapIde.scm.discardAll', async () => {
-        log.debug('触发 discardAll');
+    vscode.commands.registerCommand('bapIde.scm.updateAll', async () =>
+      safe('bapIde.scm.updateAll', async () => {
+        log.debug('触发 updateAll');
         const msg = await vscode.window.showWarningMessage(
-          '确定放弃所有未暂存的更改？将从云端恢复并覆盖本地文件，新增文件会被删除。',
+          '确定更新所有文件到云端最新版？将覆盖本地改动，新增文件会被删除。',
           { modal: true },
-          '放弃',
+          '更新',
         );
-        if (msg !== '放弃') return;
-        await bapScm.discardAll();
-        void vscode.window.showInformationMessage('BAP: 已放弃所有更改');
+        if (msg !== '更新') return;
+        await bapScm.updateAll();
+        void vscode.window.showInformationMessage('BAP: 已更新所有文件');
       }),
     ),
   );

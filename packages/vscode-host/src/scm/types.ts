@@ -58,11 +58,6 @@ export function scmDecoFor(status: ScmStatus): ScmDecoSpec | undefined {
   }
 }
 
-/** 稳定的变更标识（绝对路径），用于暂存/取消暂存集合。 */
-export function stagedIdent(c: { absolutePath: string }): string {
-  return c.absolutePath;
-}
-
 // --- 带颜色 A/M/D 图标（git 同款 SVG 文件，位于插件 resources/scm-icons/）---
 /** SCM 行内带颜色 A/M/D 图标文件名（status-*.svg，git 同款），供 Uri.file(iconDir/name) 引用。 */
 export function statusIconFile(status: ScmStatus): string | undefined {
