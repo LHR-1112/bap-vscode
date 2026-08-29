@@ -13,9 +13,7 @@
     "watch": "npm run watch -w bap-ide-vscode",
     "build": "npm run build -w bap-ide-vscode",
     "package": "npm run package -w bap-ide-vscode",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "smoke:rpc": "tsx packages/rpc/scripts/smoke-connect.ts"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

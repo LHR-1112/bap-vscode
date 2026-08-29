@@ -2,13 +2,7 @@
   "name": "@bap/rpc",
   "version": "0.1.0",
   "private": true,
-  "description": "BAP RPC Runtime（WebSocket / 协议 / 序列化）",
+  "description": "BAP RPC 通信面（子进程 + JSON，经 Java 桥转发到 BAP Server）",
   "main": "src/index.ts",
-  "types": "src/index.ts",
-  "dependencies": {
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "@types/ws": "^8.5.13"
-  }
+  "types": "src/index.ts"
 }

@@ -1,11 +1,14 @@
-# BAP IDE（VS Code）开发规划 V1.1
+# BAP IDE（VS Code）开发规划 V1.2
 
-> 版本说明（相对 V1.0 的变更）：
+> 版本说明（相对 V1.1 的变更）：
 >
-> - 定位从「多宿主开发运行时（Core + Host）」改为「**完整的 VS Code 插件**」。
-> - 移除 Electron、独立 CLI 等未来宿主，不再面向多宿主。
-> - 命令面即 VS Code 命令（`bapIde.*`）；并通过 **MCP** 自动暴露给 Claude Code、Codex、Copilot 等 AI 工具。
-> - 参考实现：IDEA/Eclipse 插件 Java 源码（`/Users/lihongrui/SynologyDrive/kwaidoo/eclipse_plugin/Plugin`）。
+> - **通信路线改为「Java 桥」**：不再用 TS 字节级复刻 Java 序列化，而是插件 bundle 一个 Java 进程（jar），
+>   Java 侧复用官方 `com.leavay.nio.crpc` 客户端直接连 BAP Server；TS 与 Java 之间用 `stdin/stdout + JSON` 薄接口转接，避免在 JS 里复刻 Java 二进制序列化。
+> - **Java 侧只暴露「原子化能力」**：即 `CJavaCenterIntf` 的方法集（连接/会话 + 原子方法转发），不含 MD5 对比、CommitPackage 组装、状态判断等业务逻辑——那些归 TS 侧 SDK/SCM。
+> - **新增「SCM ↔ 原子化能力」桥接设计**：VS Code 原生 SCM 视图 ↔ BAP 原子能力，经 `bap-sdk` 中间层打通（基线 = 云端）。
+> - **参考实现为生产级 IDEA 插件**：`/Users/lihongrui/IdeaProjects/PluginDemo`（`com.bap.dev.BapRpcClient`、`BapConnectionManager`、`ProjectRefresher`、`BapFileStatusService` 等）。
+> - **Java 运行时依赖用户已装的 JDK**（BAP 开发者通常已有），插件只 bundle 几百 KB 的 jar，不捎带 JRE。
+> - 保留 V1.1 的其他定位：完整 VS Code 插件、VS Code 原生 UI、一个 MCP tool ↔ 一个 `bapIde.*` 命令。
 
 ---
 
@@ -17,7 +20,7 @@ BAP IDE 是一个**完整的 VS Code 插件**，面向 BAP 云工程提供开发
 
 登录、拉取、同步、编辑、提交、发布、编译、单元测试、历史查询、重定位、依赖同步、Jar 扫描等。
 
-通过 WebSocket RPC 连接 BAP Server。
+通过 **Java 桥进程（经 WebSocket RPC）** 连接 BAP Server。
 
 内部代码仍按 `rpc / sdk / core` 分层组织，保证可维护性与可测试性；
 
@@ -52,6 +55,33 @@ BAP IDE 是一个**完整的 VS Code 插件**，面向 BAP 云工程提供开发
 
 这样 AI 无需为 BAP 各自编写 skill，即可直接驱动云工程操作。
 
+### 1.4 通信路线：Java 桥
+
+RPC 与 BAP Server 的通信**复用一个 Java 桥进程**，而不是在 TS 里字节级复刻 Java 序列化。
+
+背景：BAP CRPC（`com.leavay.nio.crpc`）基于 Netty，消息体是 **Java 原生序列化**（`ObjectOutputStream`）包裹的自定义二进制协议。
+用 TS 1:1 复刻需要精确还原 `classdesc`、字段排序、对象引用表（handle）、modified-UTF-8、集合类 `blockdata` 等细节，
+字节级极易出错（真实服务端反序列化 `CSession` 时即出现 handle 越界），且难以维护。
+
+因此改为「**让真正的 Java 去做序列化**」：
+
+```
+VS Code 插件（TS）
+   │  stdin/stdout + JSON（薄接口，类 HTTP）
+   ▼
+Java 桥进程（bundle 的 jar，常驻）
+   │  复用官方 com.leavay.nio.crpc 客户端（WebSocket + 序列化 + 心跳，全在 Java 侧）
+   ▼
+BAP Server（ws://<host>:<port>）
+```
+
+- **Java 侧**：直接用 `com.leavay.nio.crpc` 连 Server，持有 WebSocket 长连接 + 心跳 + 会话上下文，序列化完全交给官方实现（协议 100% 正确）。
+- **TS 侧**：只通过 `stdin/stdout` 用 JSON 发 `{ method, params }`，收 `{ result | error }`。TS 拿到的是普通 JSON，处理方式接近 HTTP REST。
+- **Java 运行时**：依赖用户已装的 JDK（BAP 开发者通常已有）。插件只 bundle 几百 KB 的 jar，不捎带 JRE；检测不到 Java 时给出明确安装提示。
+
+取舍：代价是**依赖 JVM**、需管理桥进程生命周期；换来的是**协议零风险、开发量大幅下降、维护容易**。
+之前用 TS 复刻的 Connection/Codec/Serializer 保留为「不依赖 JVM 的降级方案」，不作主路径。
+
 ---
 
 ## 二、总体架构
@@ -61,7 +91,11 @@ BAP IDE 是一个**完整的 VS Code 插件**，面向 BAP 云工程提供开发
                         │
                 WebSocket RPC
                         │
-                 bap-rpc（TS）
+              Java 桥进程（bundle 的 jar）
+                        │  com.leavay.nio.crpc
+                        │
+                   bap-rpc（TS）
+                        │  stdin/stdout + JSON
                         │
                  bap-sdk（TS）
                         │
@@ -78,22 +112,22 @@ BAP IDE 是一个**完整的 VS Code 插件**，面向 BAP 云工程提供开发
                   （Claude Code / Codex / Copilot）
 ```
 
+> 说明：`bap-rpc`（TS）与 BAP Server 之间隔了一个 **Java 桥进程**。TS 不再直接连 WebSocket、不做字节编解码/序列化，
+> 只经 JSON IPC 与 Java 桥通信；真正的 WebSocket、协议、序列化、心跳全部在 Java 侧（复用官方 CRPC）。
+
 整个插件内部划分为四层：
 
 ### 第一层：RPC Runtime（bap-rpc）
 
-负责：
+负责与 **Java 桥进程**通信（TS 侧部分）：
 
-- WebSocket
-- RPC 协议
-- 请求发送
-- 请求等待
-- 超时控制
-- 回调
-- Context
-- Connection 生命周期
+- 拉起 Java 桥子进程（`java -jar <bridge>.jar`）
+- `stdin/stdout` JSON 文本协议（请求 / 响应 / 事件）
+- 请求发送与等待（Promise 化）
+- 超时控制、进程生命周期管理
+- Java 侧：WebSocket、RPC 协议、序列化、心跳、会话上下文（全部复用官方 `com.leavay.nio.crpc`）
 
-完全不依赖 VS Code。
+TS 侧不依赖 VS Code。Java 桥是随插件分发的 jar 资产。
 
 ---
 
@@ -178,9 +212,9 @@ Utils
 
 ## RPC
 
-- WebSocket
-- Promise
-- Async/Await
+- **通信面（TS）**：子进程 + `stdin/stdout` JSON-lines，Promise / Async-Await
+- **传输面（Java）**：官方 `com.leavay.nio.crpc`（WebSocket + Java 原生序列化 + 心跳）
+- 运行时依赖：用户 Java（运行时触达 `java` 可执行）
 
 ---
 
@@ -238,9 +272,13 @@ bap-ide/
 
 ## rpc
 
-RPC Runtime。
+RPC Runtime（TS 侧通信面）。
 
-WebSocket 连接、协议编解码、序列化。
+负责：
+
+- 拉起 Java 桥子进程
+- `stdin/stdout` JSON 协议（请求 / 响应 / 事件）
+- 请求等待与超时、进程生命周期
 
 不依赖 VS Code。
 
@@ -300,12 +338,12 @@ MCP Server
 
 ---
 
-# 五、RPC 迁移方案（参考 Java 源码）
+# 五、RPC 迁移方案（Java 桥，参考生产插件）
 
-现有 IDEA/Eclipse 插件（`/Users/lihongrui/SynologyDrive/kwaidoo/eclipse_plugin/Plugin`）已有一版实现，关键事实：
+生产级 IDEA 插件（`/Users/lihongrui/IdeaProjects/PluginDemo`）已实现整套链路，关键事实：
 
-- RPC 核心为 `com.leavay.nio.crpc`，基于 **Netty 4.1.36** 的自研 CRPC 框架（位于 `tcmcat-*.jar` 依赖，不在插件源码内）。
-- 远程服务接口：`CJavaCenterIntf`。
+- RPC 核心为 `com.leavay.nio.crpc`，基于 **Netty 4.1.36** 的自研 CRPC 框架（位于 `tcmcat-*.jar` 依赖，随 IDE 插件库分发）。
+- 远程服务接口：`CJavaCenterIntf`（BAP Server 的所有**原子化能力**）。
 - 客户端包装：`CRpcClientWrapper<T>(T.class, uri)`。
 - 会话上下文：`CRpcAdapter.setGlobalContext(CDaoConst.CTX_SESSION, _session)`。
 - 单次调用超时：`CRpcAdapter.setTempTimeout(...)`。
@@ -340,120 +378,192 @@ CNioSerializer
 WebSocket
 ```
 
-迁移到 TypeScript 后：
+迁移到 TypeScript 时，**不做字节级复刻**。
+
+上面调用链中最棘手的部分是 `CNioSerializer`（Java 原生序列化格式）：需要字节级还原 `classdesc`、
+字段排序（primitive 前、引用按字典序）、对象引用表（handle）、modified-UTF-8、`HashMap`/集合类 `blockdata` 等。
+任何一位 handle 或一个字节差异，都会让服务端 `ObjectInputStream.readObject()` 抛
+`InvalidClassException` / `ClassCastException`。
+
+**实测结论**（见「RPC迁移-Java对照与真实服务端验证报告」）：TS 复刻的序列化器在解析真实服务端返回的
+`com.cdao.mgr.CSession`（嵌套 bean、多 String 字段 `typeString` 复用同一 handle）时，
+出现 `SERIALIZER_HANDLE: reference to unknown handle 0x7e0005` —— 证明字节级复刻成本高且易错。
+
+## Java 桥方案（原子化转发）
+
+让**真正的 Java 去做序列化**，且 **Java 侧只暴露「原子化能力」**（即 `CJavaCenterIntf` 的方法集），
+不含任何业务逻辑（不算 MD5、不组装提交包、不判状态）。
+
+### 参考实现（生产级 IDEA 插件）
+
+生产插件源码：`/Users/lihongrui/IdeaProjects/PluginDemo/src/main/java`。核心：
+`com.bap.dev.BapRpcClient`（连接 + 会话管理），`com.bap.dev.service.BapConnectionManager`（共享长连接），
+`com.bap.dev.handler.ProjectRefresher`（变更计算），`com.bap.dev.service.BapFileStatusService`（状态表）。
+
+`BapRpcClient.java`（权威）：
+```java
+public class BapRpcClient {
+    CRpcClientWrapper<CJavaCenterIntf> rpcWrapper;
+    public void connect(String uri, String user, String pwd) { // 建 wrapper → login(user,pwd) → setGlobalContext(CTX_SESSION, session)
+    }
+    public CJavaCenterIntf getService() { return rpcWrapper.getIntf(true); } // 原子能力入口
+    public void shutdown();
+    public boolean ping();
+}
+```
+
+### 架构
 
 ```
-Service
-
-↓
-
-RpcClient
-
-↓
-
-RpcCodec
-
-↓
-
-Serializer
-
-↓
-
-WebSocket
+TS（bap-rpc：原子化能力转发 + 会话句柄）
+  │  stdin/stdout JSON-lines
+  ▼
+Java 桥进程（bundle jar，常驻）
+  │  BapRpcClient.connect(uri,user,pwd) → login → 会话入全局 context
+  │  call(method, args) → 反射转发到 CJavaCenterIntf（原子方法）→ DTO 转 JSON 回传
+  ▼  com.leavay.nio.crpc（WebSocket + Java 原生序列化 + 心跳）
+BAP Server
 ```
 
-动态代理无需迁移。
+### 原子化定位（关键约束）
 
-TypeScript 可直接封装：
+**Java 桥只做两件事**：
+1. **连接/会话**：`connect(uri,user,pwd)`（含 login + 会话入全局）、`disconnect()`、`ping()`。
+2. **原子调用转发**：`call(method, args)` —— 把 `CJavaCenterIntf` 的某个方法（如 `commitCode`、`queryCodeFile`）用反射调用，返回结果转 JSON。
+
+**Java 桥不做**（这些属于 TS 侧 SDK/SCM 的职责）：
+- 不算本地/云端 MD5、不判 NORMAL/MODIFIED/ADDED/DELETED —— 那是 TS 侧 `refresh()` 的逻辑。
+- 不组装 `CommitPackage` —— TS 侧把勾选文件组织成 JSON，Java 桥只负责转发。
+- 不管理 `.develop`、不解析工程配置 —— TS 侧读配置文件。
+
+这样 Java 桥能复用官方序列化，但保持「薄、透明、无业务」，便于长期维护。
+
+### JSON 协议（stdin/stdout，JSON-lines）
+
+**请求（TS → Java）**：
+```jsonc
+{ "id": 1, "method": "connect",    "params": { "uri": "ws://...", "user": "root", "pwd": "..." } }
+{ "id": 2, "method": "call",       "params": { "method": "commitCode", "args": [ "<projectUuid>", { "...CommitPackage JSON..." } ] } }
+{ "id": 3, "method": "call",       "params": { "method": "queryCodeFile", "args": [ "<projectUuid>", "core" ] } }
+{ "id": 4, "method": "disconnect" }
+{ "id": 5, "method": "ping" }
+```
+
+**响应（Java → TS）**：
+```jsonc
+{ "id": 2, "ok": true,  "result": { /* DTO 转 JSON */ } }
+{ "id": 2, "ok": false, "error": { "type": "NoFolderException", "message": "..." } }
+```
+
+**事件（Java → TS 主动）**：长任务进度 / callback 回调（预留）：
+```jsonc
+{ "event": "progress", "payload": { ... } }
+```
+
+**DTO 序列化规则**：Java 侧用 JDK 反射把返回值（`CJavaProjectDto`/`CJavaCode`/`Map<...>`/`List<...>`/`CSession`）转成 JSON 对象；
+参数同理把 TS JSON 反序列化成方法所需类型。只透传返回给 TS，参与序列化的 DTO 字段由反射枚举（Getter + 字段）。
+
+### SDK 对外接口（不变）
+
+无论底层是 TS 复刻还是 Java 桥，`bap-sdk` 面向业务的接口保持一致：
 
 ```
-sdk.project.create()
-
-sdk.publish.gray()
-
-sdk.code.save()
+sdk.login()          → 登录，返回会话句柄
+sdk.project.list()   → 项目列表
+sdk.code.save()      → 保存代码
+sdk.publish.gray()   → 灰度发布
 ```
 
-底层统一调用：
+底层统一调用（TS 侧封装）：
 
 ```
-rpc.invoke(...)
+rpc.invoke(className, method, params) → JSON RPC 到 Java 桥
 ```
 
 目标：
 
-Serializer 与 Java 完全兼容，**无需修改服务端**。
+Java 桥复用官方客户端，**序列化与 Java 服务端天然兼容，无需修改服务端**。
 
 ---
 
-# 六、RPC 工作拆分
+## SCM ↔ 原子化能力 桥接设计
 
-建议优先完成：
+VS Code 的**原生 SCM（Source Control）**视图 + BAP 的**原子化能力**，通过中间层 `bap-sdk` 打通。
+映射关系参考生产 IDEA 插件（`ProjectRefresher`/`BapFileStatusService`/`CommitAllAction`/`PublishProjectAction`）。
 
-## 第一阶段
+> 本小节是 §五 下的桥接设计，独立于上方「Java 桥方案（原子化转发）」，但二者配套：
+> Java 桥负责**原子化转发**（§五上），本小节负责**语义映射**（把 VS Code SCM 概念映射到这些原子能力）。
 
-Connection
+### 语义映射（基线 = 云端）
 
-- WebSocket
-- 重连
-- Ping
-- Timeout
+BAP 无 Git HEAD，**「云端」就是唯一真相源**。对应到 VS Code SCM：
 
----
+| VS Code SCM 概念 | BAP 能力 | 实现 |
+|---|---|---|
+| 资源组（Changes 列表） | 变更状态集 | `refresh()`：`queryCodeFile`+`queryAllFileMap` 取云端 MD5 快照 → 遍历本地 `src/*` 算 MD5 对比 → M/A/D 集合 |
+| 状态 M/A/D | `BapFileStatus` | `MODIFIED`=本地与云端 MD5 不同；`ADDED`=本地有云端无；`DELETED_LOCALLY`=云端有本地无（0 字节/空内容标记） |
+| `originalUri`（diff 左栏/行内 diff） | 云端原版 | `getJavaCode`/`getResFile` 取云端内容 → 写临时文件作为 `TextDocumentContentProvider` |
+| 提交（Commit） | `commitCode` | 勾选文件组织成 `CommitPackage` JSON → `commitCode(projectUuid, pkg)` |
+| 发布（Publish） | `rebuildAll`+`exportProject2Plugin` | 单独命令/SCM 按钮，二者串行 |
+| 还原/更新（discard/update） | `getJavaCode`/`getResFile` | 取云端内容覆盖本地 |
+| 文件历史 | `queryFileHistory`/`getHistoryCode` | 命令触发 |
+| 工程历史 | `queryVersionList` | 命令触发 |
 
-## 第二阶段
+### 关键点
 
-Codec
+- **`src/` 一级子目录 = 云端 folder**：本地 `src/<folder>/<包路径>/*.java`，Java 文件全类名 = folder 剥掉后的包路径 + 类名；`src/res/*` = 资源。
+- **`.develop` 配置**：workspace folder 下的工程标识文件，含 `Project`(UUID)/`Uri`/`User`/`Password`/`AdminTool`。TS 侧 SDK 解析，作为 `refresh`/`commit` 的上下文。
+- **提交是「增删改」四合一**：`CommitPackage{ comments, mapFolder2Codes, deleteCodeMap, mapFolder2Files, deleteFileMap }`，一次 `commitCode` 原子提交。SCM「暂存区」= 用户在 SCM 视图勾选的文件集合，服务端无两阶段。
+- **`refresh` 复刻**：`workspace.onDidChangeTextDocument` + `onDidCreateFiles/onDidDeleteFiles` → debounce → 重新 diff → SCM provider `fireDidChange`。
 
-实现：
+### 变更状态判定的 MD5 规则（复刻 ProjectRefresher）
 
-Header
-
-```
-Magic
-
-Version
-
-Type
-
-ReqID
-```
-
-Header 完全按照现有 Java 协议实现。
-
----
-
-## 第三阶段
-
-Serializer
-
-按照 Java Serializer 实现。
-
-目标：
-
-TypeScript 与 Java 完全兼容。
-
-无需修改服务端。
+- Java：本地内容 `\r\n`→`\n` 后算标准 MD5 == 云端 md5 → NORMAL；不等再取云端原文做 **loose MD5**（去所有空白）比对，等则 NORMAL（容忍格式化差异）；否则 MODIFIED。
+- 资源：字节 MD5 直接比对。
+- 本地 0 字节/空白 → DELETED_LOCALLY。
 
 ---
 
-## 第四阶段
+# 六、RPC 工作拆分（Java 桥，原子化转发）
 
-RpcClient
+建议按「先原子、后桥接」的顺序完成：
 
-实现：
+## 第一阶段：Java 桥骨架（原子化）+ TS 通信面
 
-```
-invoke()
+- Java 侧：`BapRpcClient`（connect/login/shutdown/ping）+ `call(method, args)` 反射转发到 `CJavaCenterIntf`
+- TS 侧：子进程拉起 + `stdin/stdout` JSON-lines 协议（请求/响应）
+- 验证：`rpc.call("login", [user, pwd])` 经 Java 桥登录成功（拿到会话句柄）
+- **不做**：MD5 对比、CommitPackage 组装、状态判断（均留给 TS）
 
-wait()
+无需 TS 复刻字节协议。
 
-callback
+---
 
-context
-```
+## 第二阶段：TS SDK 业务层（负责「原子化之外」逻辑）
 
-至此即可完成 Runtime。
+- TS 侧封装 `sdk.project.list()` / `sdk.code.save()` / `sdk.publish.gray()`
+- TS 侧实现：读 `.develop` 配置、MD5 对比（refresh 变更计算）、组装 `CommitPackage` JSON
+- Java 桥保持透明：只转发 `call(method, args)`
+- 验证：`refresh()` 能算出 M/A/D 状态集；`commitCode` 能提交本地变更
+
+---
+
+## 第三阶段：SCM 桥接
+
+- `vscode.scm.createSourceControl` + SCM 资源组映射 M/A/D
+- `originalUri` ← 云端原版（`getJavaCode`/`getResFile` 写临时文件）driving 行内 diff
+- 提交（Commit）→ `commitCode`；发布（Publish）→ `rebuildAll`+`exportProject2Plugin`
+- 验证：VS Code SCM 视图能展示云端基线差分，文件能提交/发布/对比/还原
+
+---
+
+## 第四阶段：进程生命周期与稳定
+
+- Java 桥启动/关闭/崩溃重启
+- 连接、心跳、超时由 Java 侧官方实现
+- 验证：进程异常后能重启，连接能重连
+
+至此 Runtime 完成（以 Java 桥形式）。
 
 ---
 
@@ -529,7 +639,7 @@ BAP: Commit
 
 目标：
 
-RPC Runtime。
+RPC Runtime（Java 桥形态）。
 
 验证：
 
@@ -537,7 +647,7 @@ RPC Runtime。
 sdk.login()
 ```
 
-能够正常登录。
+经 Java 桥（子进程 + JSON IPC）能够正常登录，拿到会话句柄。
 
 此阶段无需任何 UI。
 
@@ -650,8 +760,8 @@ BAP IDE 就是一个**完整的 VS Code 插件**，不再规划多宿主。
 
 1. **人可操作**：通过 VS Code 原生 UI（SCM / TreeView / Command）完成云工程全流程。
 2. **AI 可操作**：通过 MCP 把同一套命令面暴露给 Claude Code / Codex / Copilot。
-3. **协议稳定**：RPC 层（WebSocket + 序列化）与 Java 服务端兼容、无侵入，长期无需改服务端。
+3. **协议稳定**：RPC 由 Java 桥（复用官方 `com.leavay.nio.crpc`）承载，序列化与 Java 服务端天然兼容、无侵入，长期无需改服务端。
 
-业务能力、RPC Runtime、SDK 保持平台无关，以便未来若需要可复用；
+业务能力、RPC 通信面（TS）、SDK 保持平台无关，以便未来若需要可复用；
 
-但 UI 与集成以 VS Code 为主，不做 Electron、不做独立 CLI。
+但 UI 与集成以 VS Code 为主，不做 Electron、不做独立 CLI。Java 桥是唯一引入的 JVM 依赖（BAP 开发者通常已有 JDK）。
