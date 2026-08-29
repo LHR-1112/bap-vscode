@@ -24,17 +24,17 @@
       },
       {
         "command": "bapIde.scm.refresh",
-        "title": "BAP: Refresh",
+        "title": "刷新",
         "icon": "$(refresh)"
       },
       {
         "command": "bapIde.scm.commit",
-        "title": "提交到 BAP",
-        "icon": "$(check)"
+        "title": "提交全部",
+        "icon": "$(cloud-upload)"
       },
       {
         "command": "bapIde.scm.publish",
-        "title": "发布到 BAP",
+        "title": "发布插件",
         "icon": "$(rocket)"
       },
       {
@@ -44,7 +44,7 @@
       {
         "command": "bapIde.scm.commitFile",
         "title": "提交该文件",
-        "icon": "$(check)"
+        "icon": "$(cloud-upload)"
       },
       {
         "command": "bapIde.scm.updateFile",
@@ -58,7 +58,7 @@
       },
       {
         "command": "bapIde.scm.updateAll",
-        "title": "更新所有",
+        "title": "更新全部",
         "icon": "$(cloud-download)"
       }
     ],
@@ -66,22 +66,42 @@
       "scm/title": [
         {
           "command": "bapIde.scm.refresh",
-          "group": "navigation",
-          "when": "scmProvider == bap"
-        },
-        {
-          "command": "bapIde.scm.commit",
-          "group": "navigation",
+          "group": "navigation@1",
           "when": "scmProvider == bap"
         },
         {
           "command": "bapIde.scm.updateAll",
-          "group": "navigation",
+          "group": "navigation@2",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.commit",
+          "group": "navigation@3",
           "when": "scmProvider == bap"
         },
         {
           "command": "bapIde.scm.publish",
+          "group": "navigation@4",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.refresh",
           "group": "2_main@1",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.updateAll",
+          "group": "2_main@2",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.commit",
+          "group": "2_main@3",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.publish",
+          "group": "2_main@4",
           "when": "scmProvider == bap"
         }
       ],
@@ -92,12 +112,12 @@
           "when": "scmProvider == bap"
         },
         {
-          "command": "bapIde.scm.commitFile",
+          "command": "bapIde.scm.updateFile",
           "group": "inline@1",
           "when": "scmProvider == bap"
         },
         {
-          "command": "bapIde.scm.updateFile",
+          "command": "bapIde.scm.commitFile",
           "group": "inline@2",
           "when": "scmProvider == bap"
         }

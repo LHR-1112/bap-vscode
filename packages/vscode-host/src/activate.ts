@@ -109,9 +109,14 @@ export function activateScm(
     vscode.commands.registerCommand('bapIde.scm.publish', async () =>
       safe('bapIde.scm.publish', async () => {
         log.debug('触发 publish');
-        void vscode.window.showInformationMessage('BAP: publish 已触发');
-        await sdk.publish.gray();
-        void vscode.window.setStatusBarMessage('BAP: 已发布', 3000);
+        const msg = await vscode.window.showWarningMessage(
+          '确定发布插件（全量）？将把当前工程发布给所有用户。',
+          { modal: true },
+          '发布',
+        );
+        if (msg !== '发布') return;
+        await sdk.publish.full();
+        void vscode.window.setStatusBarMessage('BAP: 已发布插件（全量）', 3000);
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.openDiff', async (arg?: unknown) =>
