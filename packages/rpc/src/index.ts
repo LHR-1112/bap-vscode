@@ -1,6 +1,7 @@
 // @bap/rpc —— RPC Runtime（第一层）。
 // 第一阶段：Connection（WebSocket / 重连 / Ping / Timeout）。
-// 后续阶段：Codec（Header 编解码）、Serializer（Java 序列化兼容）、RpcClient。
+// 第二阶段：Codec（Header 编解码 / 消息体建模）。
+// 后续阶段：Serializer（Java 序列化兼容）、RpcClient。
 
 export { RpcConnection } from './connection/connection';
 export { ConnectionState } from './connection/types';
@@ -17,3 +18,5 @@ export type {
   CloseInfo,
   Logger,
 } from './connection/types';
+
+export * from './codec';
