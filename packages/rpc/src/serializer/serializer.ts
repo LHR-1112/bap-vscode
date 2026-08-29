@@ -1,11 +1,11 @@
-import type { RpcRequest, RpcPing, RpcResponse, RpcCallbackReq } from '../codec/messages';
+import type { RpcRequest, RpcPing, RpcResponse, RpcCallbackReq, RpcCallbackResponse } from '../codec/messages';
 import { ObjectOutputStream } from './writer';
 import { ObjectInputStream } from './reader';
 import { StreamReader } from './stream-reader';
 import { toJavaMessage, fromJavaToMessage } from './value';
 import { CorruptStreamError } from './errors';
 
-export type RpcMessage = RpcRequest | RpcPing | RpcResponse | RpcCallbackReq;
+export type RpcMessage = RpcRequest | RpcPing | RpcResponse | RpcCallbackReq | RpcCallbackResponse;
 
 /** 序列化一个 RPC 消息为 body（含流头 0xACED0005）。 */
 export function serializeBody(msg: RpcMessage): Buffer {

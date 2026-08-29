@@ -136,7 +136,7 @@ export function toJavaMessage(msg: RpcRequest | RpcResponse | RpcCallbackReq): J
         callbackUuid: msg.callbackUuid === null ? { t: 'null' } : { t: 'string', v: msg.callbackUuid },
         context: msg.context === null ? { t: 'null' } : toJava(msg.context),
         function: msg.function === null ? { t: 'null' } : { t: 'string', v: msg.function },
-        params: msg.params === null ? { t: 'null' } : { t: 'array', fqcn: '[Ljava.lang.Object;', elems: msg.params.map((p) => toJava(p)) },
+        params: msg.params === null ? { t: 'null' } : { t: 'array', fqcn: '[Ljava.lang.Object;', elems: msg.params.map((p) => toRef(p)) },
       },
     };
   }
@@ -147,8 +147,8 @@ export function toJavaMessage(msg: RpcRequest | RpcResponse | RpcCallbackReq): J
       fqcn,
       values: {
         reqID: { t: 'long', v: BigInt(msg.reqID) },
-        err: msg.err === null || msg.err === undefined ? { t: 'null' } : toJava(msg.err),
-        result: msg.result === null || msg.result === undefined ? { t: 'null' } : toJava(msg.result),
+        err: msg.err === null || msg.err === undefined ? { t: 'null' } : toRef(msg.err),
+        result: msg.result === null || msg.result === undefined ? { t: 'null' } : toRef(msg.result),
       },
     };
   }
@@ -162,7 +162,7 @@ export function toJavaMessage(msg: RpcRequest | RpcResponse | RpcCallbackReq): J
       className: msg.className === null ? { t: 'null' } : { t: 'string', v: msg.className },
       context: msg.context === null ? { t: 'null' } : toJava(msg.context),
       function: msg.function === null ? { t: 'null' } : { t: 'string', v: msg.function },
-      params: msg.params === null ? { t: 'null' } : { t: 'array', fqcn: '[Ljava.lang.Object;', elems: msg.params.map((p) => toJava(p)) },
+      params: msg.params === null ? { t: 'null' } : { t: 'array', fqcn: '[Ljava.lang.Object;', elems: msg.params.map((p) => toRef(p)) },
       reqType: msg.reqType === null || msg.reqType === undefined ? { t: 'null' } : { t: 'bean', fqcn: 'java.lang.Byte', values: { value: { t: 'byte', v: msg.reqType } } },
     },
   };

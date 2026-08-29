@@ -22,3 +22,4 @@ export type {
 
 export * from './codec';
 export * from './serializer';
+export * from './rpc-client';

@@ -26,6 +26,6 @@ export {
   isRpcMessage,
 } from './messages';
 export type { RpcMessageIntf, RpcMessage, RpcEncodeInput } from './messages';
-export { encode, decode, needsDeserialization } from './codec';
+export { encode, decode, decodeMessage, needsDeserialization } from './codec';
 export type { EncodeOptions, DecodeOptions, RpcFrame, BodySerializer } from './codec';
 export { CodecError, HeaderFormatError, ReqIdRangeError } from './errors';
