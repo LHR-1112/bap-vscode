@@ -16,7 +16,8 @@ export class SdkError extends Error {
 }
 
 const ENTRY_RE = /<entry\s+key=["']([^"']+)["']\s*>(.*?)<\/entry>/gi;
-const ATTR_RE = /<\w+[^>]*?\s+(Project|Uri|User|Password|AdminTool|LocalNioPort)\s*=\s*["']([^"']*)["'][^>]*>/gi;
+// 属性格式：全局匹配每个 属性="值"，不锚定标签开头（避免一次逻辑消费整行只抓第一个属性）
+const ATTR_RE = /(?:^|[^A-Za-z])(Project|Uri|User|Password|AdminTool|LocalNioPort)\s*=\s*["']([^"']*)["']/gi;
 
 function stripComments(xml: string): string {
   return xml

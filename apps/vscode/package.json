@@ -21,8 +21,58 @@
       {
         "command": "bapIde.showVersion",
         "title": "BAP: Show Version"
+      },
+      {
+        "command": "bapIde.scm.refresh",
+        "title": "BAP: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "bapIde.scm.commit",
+        "title": "提交到 BAP",
+        "icon": "$(check)"
+      },
+      {
+        "command": "bapIde.scm.publish",
+        "title": "发布到 BAP",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "bapIde.scm.openDiff",
+        "title": "打开 Diff"
       }
-    ]
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "bapIde.scm.refresh",
+          "group": "navigation",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.commit",
+          "group": "navigation",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.publish",
+          "group": "2_main@1",
+          "when": "scmProvider == bap"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "bapIde.scm.openDiff",
+          "group": "navigation",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.commit",
+          "group": "1_modification@1",
+          "when": "scmProvider == bap"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "node esbuild.js",
