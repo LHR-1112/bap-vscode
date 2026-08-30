@@ -42,6 +42,11 @@
         "title": "打开 Diff"
       },
       {
+        "command": "bapIde.scm.openFile",
+        "title": "打开文件",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "bapIde.scm.commitFile",
         "title": "提交该文件",
         "icon": "$(cloud-upload)"
@@ -117,18 +122,38 @@
       ],
       "scm/resourceState/context": [
         {
+          "command": "bapIde.scm.openFile",
+          "group": "inline@1",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.updateFile",
+          "group": "inline@2",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.commitFile",
+          "group": "inline@3",
+          "when": "scmProvider == bap"
+        },
+        {
           "command": "bapIde.scm.openDiff",
           "group": "navigation",
           "when": "scmProvider == bap"
         },
         {
+          "command": "bapIde.scm.openFile",
+          "group": "navigation",
+          "when": "scmProvider == bap"
+        },
+        {
           "command": "bapIde.scm.updateFile",
-          "group": "inline@1",
+          "group": "navigation",
           "when": "scmProvider == bap"
         },
         {
           "command": "bapIde.scm.commitFile",
-          "group": "inline@2",
+          "group": "navigation",
           "when": "scmProvider == bap"
         }
       ],

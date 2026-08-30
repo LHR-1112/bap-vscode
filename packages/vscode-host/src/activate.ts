@@ -128,6 +128,19 @@ export function activateScm(
         await openDiff(change, workspaceRoot);
       }),
     ),
+    vscode.commands.registerCommand('bapIde.scm.openFile', async (arg?: unknown) =>
+      safe('bapIde.scm.openFile', async () => {
+        const change = resolveChange(arg);
+        log.debug(`openFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
+        if (!change) return;
+        // 已删除的本地文件无法打开
+        if (change.status === 'DELETED_LOCALLY') {
+          void vscode.window.showInformationMessage(`BAP: 文件已删除，无法打开：${change.relativePath}`);
+          return;
+        }
+        await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(change.absolutePath));
+      }),
+    ),
     vscode.commands.registerCommand('bapIde.scm.commitFile', async (arg?: unknown) =>
       safe('bapIde.scm.commitFile', async () => {
         const change = resolveChange(arg);
