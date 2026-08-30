@@ -67,8 +67,8 @@ export function createBapScmProvider(
   };
   sc.quickDiffProvider = qdp;
   sc.inputBox.placeholder = '提交信息（可选）';
-  // 「提交」按钮 / 输入框回车触发提交（git 同款：acceptInputCommand → commit 命令）
-  sc.acceptInputCommand = { command: 'bapIde.scm.commit', title: '提交' };
+  // 「提交」大按钮 / 输入框回车触发提交（git 同款：acceptInputCommand → commit 命令）
+  sc.acceptInputCommand = { command: 'bapIde.scm.commit', title: '提交全部' };
   sc.count = 0;
 
   let lastChanges: Change[] = [];
