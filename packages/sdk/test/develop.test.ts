@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { loadDevelop, SdkError } from '../src/develop';
+import { loadDevelop, writeDevelop, SdkError } from '../src/develop';
 
 // 密码用占位符，避免把真实凭据写进仓库（解析逻辑不依赖密码具体值）
 const PWD_TOKEN = 'test-pwd-token';
@@ -52,6 +52,34 @@ describe('loadDevelop', () => {
   it('文件不存在抛 MISSING_DEVELOP', () => {
     const root = mkTmp();
     expect(() => loadDevelop(root)).toThrow();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe('writeDevelop', () => {
+  it('写入后可被 loadDevelop 读回（含 XML 转义）', () => {
+    const root = mkTmp();
+    writeDevelop(root, {
+      projectUuid: 'uuid_1',
+      uri: 'ws://h:1',
+      user: 'u&s<er>',
+      pwd: `p"wd'#${PWD_TOKEN}`,
+      adminTool: 'bap.client.BapMainFrame',
+    });
+    const cfg = loadDevelop(root);
+    expect(cfg.projectUuid).toBe('uuid_1');
+    expect(cfg.uri).toBe('ws://h:1');
+    expect(cfg.user).toBe('u&s<er>');
+    expect(cfg.pwd).toBe(`p"wd'#${PWD_TOKEN}`);
+    expect(cfg.adminTool).toBe('bap.client.BapMainFrame');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('未传 adminTool 时写入默认值', () => {
+    const root = mkTmp();
+    writeDevelop(root, { projectUuid: 'uuid_2', uri: 'ws://h:2', user: 'u', pwd: PWD_TOKEN });
+    const cfg = loadDevelop(root);
+    expect(cfg.adminTool).toBe('bap.client.BapMainFrame');
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

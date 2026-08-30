@@ -3,11 +3,12 @@
 
 export { createBapSdk } from './services';
 export type { BapSdk, BapSdkOptions } from './services';
-export { loadDevelop, SdkError } from './develop';
+export { loadDevelop, writeDevelop, SdkError } from './develop';
 export { refreshChanges, isNoFolderException } from './refresh';
 export { buildCommitPackage, commitCode, allocUuidWithUnderline } from './commit';
 export { md5String, md5Bytes, looseMd5, computeJavaStatus, computeResourceStatus } from './status';
 export { scanFolder, toFullClass, dirToPackage } from './file-scanner';
+export { loadRelocateHistory, saveRelocateHistory, addRelocateHistory, removeRelocateHistory } from './relocate';
 
 export type {
   Status,
@@ -23,3 +24,4 @@ export type {
   Change,
   CommitResult,
 } from './types';
+export type { RelocateProfile } from './relocate';

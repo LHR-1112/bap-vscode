@@ -34,6 +34,16 @@ function decodeEntities(s: string): string {
     .replace(/&apos;/g, "'");
 }
 
+/** 属性值 XML 转义（decodeEntities 的逆函数）。 */
+function encodeEntities(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 // 字段名 -> DevelopConfig 键
 const KEY_MAP: Record<string, keyof DevelopConfig> = {
   project: 'projectUuid',
@@ -87,4 +97,15 @@ export function loadDevelop(workspaceRoot: string): DevelopConfig {
     throw new SdkError(`.develop 配置为空或格式无法解析: ${file}`, 'CONFIG_INCOMPLETE');
   }
   return normalizeToConfig(pairs);
+}
+
+/** 写入 .develop（Java 同款单标签属性格式）。会覆盖原文件，请先确认意图。 */
+export function writeDevelop(
+  workspaceRoot: string,
+  cfg: { projectUuid: string; uri: string; user: string; pwd: string; adminTool?: string; localNioPort?: string },
+): void {
+  const xml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n\n` +
+    `<Development Project="${encodeEntities(cfg.projectUuid)}" Uri="${encodeEntities(cfg.uri)}" AdminTool="${encodeEntities(cfg.adminTool ?? 'bap.client.BapMainFrame')}" User="${encodeEntities(cfg.user)}" Password="${encodeEntities(cfg.pwd)}" LocalNioPort="-1"/>`;
+  fs.writeFileSync(path.join(workspaceRoot, '.develop'), xml, 'utf8');
 }

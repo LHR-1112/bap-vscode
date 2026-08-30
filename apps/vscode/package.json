@@ -75,6 +75,11 @@
         "command": "bapIde.scm.updateAll",
         "title": "更新全部",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "bapIde.scm.redirect",
+        "title": "重定向",
+        "icon": "$(location)"
       }
     ],
     "menus": {
@@ -100,6 +105,11 @@
           "when": "scmProvider == bap"
         },
         {
+          "command": "bapIde.scm.redirect",
+          "group": "navigation@5",
+          "when": "scmProvider == bap"
+        },
+        {
           "command": "bapIde.scm.refresh",
           "group": "2_main@1",
           "when": "scmProvider == bap"
@@ -117,6 +127,11 @@
         {
           "command": "bapIde.scm.publish",
           "group": "2_main@4",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.redirect",
+          "group": "2_main@5",
           "when": "scmProvider == bap"
         }
       ],

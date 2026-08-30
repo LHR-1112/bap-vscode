@@ -1,8 +1,9 @@
 // 激活 BAP SCM：创建 SCM provider + 云端原版 provider + 文件角标 + 注册命令。
 import * as vscode from 'vscode';
 import * as path from 'path';
-import type { BapSdk, Change } from '@bap/sdk';
-import { createBapScmProvider } from './scm/bap-scm-provider';
+import type { BapSdk, CJavaProjectDto, Change, RelocateProfile } from '@bap/sdk';
+import { addRelocateHistory, loadDevelop, loadRelocateHistory, removeRelocateHistory } from '@bap/sdk';
+import { createBapScmProvider, type BapScmProviderHandle } from './scm/bap-scm-provider';
 import { registerOriginalProvider } from './scm/original-provider';
 import { groupToStatus } from './scm/types';
 import { BapFileDecorationProvider, registerFileDecoration } from './scm/file-decoration';
@@ -232,6 +233,12 @@ export function activateScm(
         void vscode.window.showInformationMessage('BAP: 已更新所有文件');
       }),
     ),
+    vscode.commands.registerCommand('bapIde.scm.redirect', async () =>
+      safe('bapIde.scm.redirect', async () => {
+        log.debug('触发 redirect');
+        await runRedirect(sdk, bapScm, workspaceRoot, log);
+      }),
+    ),
   );
 
   return subscriptions;
@@ -253,4 +260,209 @@ async function openDiff(change: Change, workspaceRoot: string): Promise<void> {
     : `${change.fullClass ?? change.relativePath} (BAP)`;
 
   await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
+}
+
+// ---- 重定向（redirect）----
+
+type RedirectDecision =
+  | { type: 'pick'; profile: RelocateProfile }
+  | { type: 'new' }
+  | { type: 'edit'; profile: RelocateProfile }
+  | { type: 'cancel' };
+
+/** 入口：先展示重定向历史，选一条直达；可编辑；底部新增。 */
+async function runRedirect(
+  sdk: BapSdk,
+  bapScm: BapScmProviderHandle,
+  workspaceRoot: string,
+  log: { debug(msg: string): void; error(msg: string): void },
+): Promise<void> {
+  ensureCurrentInHistory(workspaceRoot);
+  const history = loadRelocateHistory(workspaceRoot);
+  const decision = await showHistoryQuickPick(history, workspaceRoot);
+  log.debug(`redirect decision=${decision.type}`);
+
+  if (decision.type === 'cancel') return;
+  if (decision.type === 'pick') {
+    await applyRedirect(sdk, bapScm, decision.profile);
+    return;
+  }
+  if (decision.type === 'new') {
+    await collectAndRedirect(sdk, bapScm, log);
+    return;
+  }
+  if (decision.type === 'edit') {
+    await editAndRedirect(sdk, bapScm, decision.profile);
+  }
+}
+
+/** QuickPick：历史列表（每条带编辑/删除按钮）+ 底部「新增地址」。返回选择。 */
+async function showHistoryQuickPick(history: RelocateProfile[], workspaceRoot: string): Promise<RedirectDecision> {
+  const EDIT_BTN = { iconPath: new vscode.ThemeIcon('edit'), tooltip: '编辑' };
+  const DEL_BTN = { iconPath: new vscode.ThemeIcon('trash'), tooltip: '删除' };
+  const profileByItem = new Map<vscode.QuickPickItem, RelocateProfile | 'NEW'>();
+  const items: vscode.QuickPickItem[] = history.map((h) => {
+    const item: vscode.QuickPickItem = {
+      label: `${h.uri} - ${h.user}`,
+    };
+    item.buttons = [DEL_BTN, EDIT_BTN];
+    profileByItem.set(item, h);
+    return item;
+  });
+  const newItem: vscode.QuickPickItem = {
+    label: '$(add) 新增地址',
+    description: '输入 ws 地址 / 账号 / 密码，并选择目标工程',
+  };
+  profileByItem.set(newItem, 'NEW');
+  items.push(newItem);
+
+  return new Promise<RedirectDecision>((resolve) => {
+    const qp = vscode.window.createQuickPick();
+    qp.items = items;
+    qp.placeholder = '选择重定向历史（可直接重定向 / 编辑 / 删除），或新增地址';
+    qp.matchOnDescription = true;
+    qp.matchOnDetail = true;
+    let done = false;
+    const finish = (d: RedirectDecision): void => {
+      if (done) return;
+      done = true;
+      qp.hide();
+      resolve(d);
+    };
+    qp.onDidTriggerItemButton((e) => {
+      const rec = profileByItem.get(e.item);
+      if (!rec || rec === 'NEW') return;
+      if (e.button === DEL_BTN) {
+        // 就地删除：更新文件并刷新列表（不离开弹窗）
+        removeRelocateHistory(workspaceRoot, rec);
+        profileByItem.delete(e.item);
+        qp.items = qp.items.filter((i) => i !== e.item);
+        return;
+      }
+      if (e.button === EDIT_BTN) finish({ type: 'edit', profile: rec });
+    });
+    qp.onDidAccept(() => {
+      const sel = qp.selectedItems[0];
+      const rec = sel ? profileByItem.get(sel) : undefined;
+      if (rec === 'NEW') finish({ type: 'new' });
+      else if (rec) finish({ type: 'pick', profile: rec });
+    });
+    qp.onDidHide(() => finish({ type: 'cancel' }));
+    qp.show();
+  });
+}
+
+/** 把当前 .develop 地址也写进历史（首次重定向时避免历史为空、方便选回当前 server）。 */
+function ensureCurrentInHistory(workspaceRoot: string): void {
+  try {
+    const cfg = loadDevelop(workspaceRoot);
+    addRelocateHistory(workspaceRoot, {
+      uri: cfg.uri,
+      user: cfg.user,
+      pwd: cfg.pwd,
+      projectUuid: cfg.projectUuid,
+      projectName: '',
+      adminTool: cfg.adminTool,
+    });
+  } catch {
+    // .develop 缺失等情况忽略
+  }
+}
+
+/** 直接重定向：用历史配置改写 .develop + 立即重连刷新。 */
+async function applyRedirect(sdk: BapSdk, bapScm: BapScmProviderHandle, profile: RelocateProfile): Promise<void> {
+  await sdk.redirect.apply(profile);
+  await bapScm.refresh();
+  void vscode.window.setStatusBarMessage(`BAP: 已重定向到 ${profile.projectName || profile.uri}`, 3000);
+}
+
+/** 新增地址：依次输入 ws / 账号 / 密码 → 连接列出工程 → 选目标工程 → 应用。 */
+async function collectAndRedirect(
+  sdk: BapSdk,
+  bapScm: BapScmProviderHandle,
+  log: { debug(msg: string): void; error(msg: string): void },
+): Promise<void> {
+  const uri = await vscode.window.showInputBox({
+    prompt: 'BAP Server ws 地址', placeHolder: 'ws://host:port', ignoreFocusOut: true,
+    validateInput: (v) => (v && v.trim() ? undefined : '必填'),
+  });
+  if (!uri) return;
+  const user = await vscode.window.showInputBox({
+    prompt: '账号', ignoreFocusOut: true,
+    validateInput: (v) => (v && v.trim() ? undefined : '必填'),
+  });
+  if (!user) return;
+  const pwd = await vscode.window.showInputBox({
+    prompt: '密码', password: true, ignoreFocusOut: true,
+    validateInput: (v) => (v ? undefined : '必填'),
+  });
+  if (!pwd) return;
+
+  let projects: CJavaProjectDto[];
+  try {
+    projects = await sdk.redirect.probe(uri.trim(), user.trim(), pwd);
+  } catch (e) {
+    await resetConnection(sdk);
+    const msg = e instanceof Error ? e.message : String(e);
+    log.error(`redirect probe 失败: ${msg}`);
+    void vscode.window.showErrorMessage(`BAP: 连接失败 - ${msg}`);
+    return;
+  }
+  if (projects.length === 0) {
+    await resetConnection(sdk);
+    void vscode.window.showInformationMessage('BAP: 该服务器上没有工程');
+    return;
+  }
+
+  const byItem = new Map<vscode.QuickPickItem, CJavaProjectDto>();
+  const items = projects.map((p) => {
+    const item: vscode.QuickPickItem = { label: p.name, description: p.uuid, detail: p.uuid };
+    byItem.set(item, p);
+    return item;
+  });
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: '选择要重定向到的目标工程', matchOnDescription: true, matchOnDetail: true,
+  });
+  if (!picked) {
+    await resetConnection(sdk);
+    return;
+  }
+  const dto = byItem.get(picked);
+  if (!dto) {
+    await resetConnection(sdk);
+    return;
+  }
+
+  await applyRedirect(sdk, bapScm, {
+    uri: uri.trim(), user: user.trim(), pwd,
+    projectUuid: dto.uuid, projectName: dto.name,
+  });
+}
+
+/** 编辑历史：改 ws / 账号 / 密码（保留原工程），应用。 */
+async function editAndRedirect(sdk: BapSdk, bapScm: BapScmProviderHandle, profile: RelocateProfile): Promise<void> {
+  const uri = await vscode.window.showInputBox({
+    prompt: 'ws 地址', value: profile.uri, ignoreFocusOut: true,
+    validateInput: (v) => (v && v.trim() ? undefined : '必填'),
+  });
+  if (!uri) return;
+  const user = await vscode.window.showInputBox({
+    prompt: '账号', value: profile.user, ignoreFocusOut: true,
+    validateInput: (v) => (v && v.trim() ? undefined : '必填'),
+  });
+  if (!user) return;
+  const pwd = await vscode.window.showInputBox({
+    prompt: '密码', password: true, value: profile.pwd, ignoreFocusOut: true,
+  });
+  if (!pwd) return;
+  await applyRedirect(sdk, bapScm, { ...profile, uri: uri.trim(), user: user.trim(), pwd });
+}
+
+/** 探测/重定向取消或失败后，把当前连接复位（下次 refresh 按现有 .develop 重建）。 */
+async function resetConnection(sdk: BapSdk): Promise<void> {
+  try {
+    await sdk.disconnect();
+  } catch {
+    // 忽略
+  }
 }

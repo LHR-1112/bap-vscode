@@ -5,6 +5,9 @@ out/
 *.log
 .DS_Store
 
+# 重定向历史等本地敏感配置（含明文密码），不入库
+.bap/
+
 # Java 桥构建产物（jar 是第三方二进制，不纳入 git）
 packages/java-bridge/lib/
 packages/java-bridge/out/

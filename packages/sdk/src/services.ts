@@ -1,9 +1,10 @@
 // BapSdk 工厂 + 高层业务方法（面向业务，不暴露 RPC）。
 import * as fs from 'fs';
 import * as path from 'path';
-import { loadDevelop } from './develop';
+import { loadDevelop, writeDevelop } from './develop';
 import { refreshChanges } from './refresh';
 import { buildCommitPackage, commitCode } from './commit';
+import { addRelocateHistory, type RelocateProfile } from './relocate';
 import type {
   Change,
   CJavaCode,
@@ -41,6 +42,11 @@ export interface BapSdk {
   publish: {
     gray(opts?: { requireCompile?: boolean }): Promise<void>;
     full(opts?: { ignoreErrors?: boolean }): Promise<void>;
+  };
+  /** 重定向：用给定的 server 连接列出工程 / 改写 .develop 并断开（下次 refresh 用新配置重连）。 */
+  redirect: {
+    probe(uri: string, user: string, pwd: string): Promise<CJavaProjectDto[]>;
+    apply(profile: RelocateProfile): Promise<void>;
   };
   /** 丢弃变更：把变更还原到云端（MODIFIED/DELETED 用云端原版覆盖，ADDED 删除本地）。 */
   discardAll(changes: Change[]): Promise<void>;
@@ -161,6 +167,29 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
         const projectUuid = await ensureProjectUuid();
         await rpc.call('rebuildAll', projectUuid);
         await rpc.call('exportProject2Plugin', projectUuid, null, true, opts?.ignoreErrors ?? false);
+      },
+    },
+
+    redirect: {
+      /** 用给定 uri/user/pwd 连接并列出该 server 上所有工程（探测用）。 */
+      async probe(uri, user, pwd) {
+        await rpc.connect(uri, user, pwd);
+        return rpc.call('getAllProjects') as Promise<CJavaProjectDto[]>;
+      },
+      /** 改写 .develop + 更新历史 + 断开；下次 refresh 按新配置重连。 */
+      async apply(profile) {
+        writeDevelop(workspaceRoot, {
+          projectUuid: profile.projectUuid,
+          uri: profile.uri,
+          user: profile.user,
+          pwd: profile.pwd,
+          adminTool: profile.adminTool,
+        });
+        addRelocateHistory(workspaceRoot, profile);
+        // 清 develop/session 缓存并断开远端，避免残留旧 server 状态；下次 refresh 重读新 .develop
+        await rpc.disconnect();
+        session = null;
+        develop = null;
       },
     },
 
