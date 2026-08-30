@@ -57,6 +57,16 @@
         "icon": "$(diff-multiple)"
       },
       {
+        "command": "bapIde.scm.updateGroup",
+        "title": "更新该组",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "bapIde.scm.commitGroup",
+        "title": "提交该组",
+        "icon": "$(cloud-upload)"
+      },
+      {
         "command": "bapIde.scm.updateAll",
         "title": "更新全部",
         "icon": "$(cloud-download)"
@@ -126,6 +136,16 @@
         {
           "command": "bapIde.scm.openAllChanges",
           "group": "inline@1",
+          "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
+        },
+        {
+          "command": "bapIde.scm.updateGroup",
+          "group": "inline@2",
+          "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
+        },
+        {
+          "command": "bapIde.scm.commitGroup",
+          "group": "inline@3",
           "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
         }
       ]

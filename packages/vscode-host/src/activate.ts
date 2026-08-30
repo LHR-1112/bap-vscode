@@ -4,6 +4,7 @@ import * as path from 'path';
 import type { BapSdk, Change } from '@bap/sdk';
 import { createBapScmProvider } from './scm/bap-scm-provider';
 import { registerOriginalProvider } from './scm/original-provider';
+import { groupToStatus } from './scm/types';
 import { BapFileDecorationProvider, registerFileDecoration } from './scm/file-decoration';
 
 export interface ActivateScmOptions {
@@ -159,6 +160,50 @@ export function activateScm(
         for (const c of list) {
           if (c.absolutePath) await openDiff(c, workspaceRoot);
         }
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.scm.updateGroup', async (group?: vscode.SourceControlResourceGroup) =>
+      safe('bapIde.scm.updateGroup', async () => {
+        if (!group?.id) {
+          void vscode.window.showWarningMessage('BAP: 请在资源组上点击此操作');
+          return;
+        }
+        const status = groupToStatus(group.id);
+        if (!status) return;
+        const list = bapScm.getChanges().filter((c) => c.status === status);
+        log.debug(`updateGroup[${group.id}]: ${list.length} 个`);
+        if (list.length === 0) {
+          void vscode.window.showInformationMessage('BAP: 该组没有更改');
+          return;
+        }
+        const msg = await vscode.window.showWarningMessage(
+          `确定更新「${group.label}」组这 ${list.length} 个文件到云端最新版？将覆盖本地改动，新增文件会被删除。`,
+          { modal: true },
+          '更新',
+        );
+        if (msg !== '更新') return;
+        await bapScm.updateChanges(list);
+        void vscode.window.setStatusBarMessage('BAP: 已更新该组', 3000);
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.scm.commitGroup', async (group?: vscode.SourceControlResourceGroup) =>
+      safe('bapIde.scm.commitGroup', async () => {
+        if (!group?.id) {
+          void vscode.window.showWarningMessage('BAP: 请在资源组上点击此操作');
+          return;
+        }
+        const status = groupToStatus(group.id);
+        if (!status) return;
+        const list = bapScm.getChanges().filter((c) => c.status === status);
+        log.debug(`commitGroup[${group.id}]: ${list.length} 个`);
+        if (list.length === 0) {
+          void vscode.window.showInformationMessage('BAP: 该组没有可提交的更改');
+          return;
+        }
+        const comment = bapScm.sourceControl.inputBox.value || '';
+        await bapScm.commitChanges(list, comment);
+        bapScm.sourceControl.inputBox.value = '';
+        void vscode.window.setStatusBarMessage('BAP: 已提交该组', 3000);
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.updateAll', async () =>

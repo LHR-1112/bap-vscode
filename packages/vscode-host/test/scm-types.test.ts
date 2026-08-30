@@ -8,6 +8,7 @@ import {
   relToResPath,
   bapOriginalUriSpec,
   parseBapOriginalUri,
+  groupToStatus,
 } from '../src/scm/types';
 
 describe('scm/types 纯函数', () => {
@@ -30,6 +31,13 @@ describe('scm/types 纯函数', () => {
     expect(iconFor('MODIFIED')).toBe('edit');
     expect(iconFor('ADDED')).toBe('add');
     expect(iconFor('DELETED_LOCALLY')).toBe('circle-outline');
+  });
+
+  it('groupToStatus 映射组 id 到状态', () => {
+    expect(groupToStatus('added')).toBe('ADDED');
+    expect(groupToStatus('modified')).toBe('MODIFIED');
+    expect(groupToStatus('deleted')).toBe('DELETED_LOCALLY');
+    expect(groupToStatus('unknown')).toBeUndefined();
   });
 
   it('statusIconFile 返回 M/A/D 状态的 SVG 文件名', () => {

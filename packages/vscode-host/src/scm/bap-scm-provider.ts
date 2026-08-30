@@ -14,6 +14,8 @@ export interface BapScmProviderHandle {
   getDecorations(): BapFileDecorationMap;
   commitFile(change: Change, comment?: string): Promise<void>;
   updateFile(change: Change): Promise<void>;
+  commitChanges(changes: Change[], comment?: string): Promise<void>;
+  updateChanges(changes: Change[]): Promise<void>;
   updateAll(): Promise<void>;
   commit(comment?: string): Promise<void>;
   dispose(): void;
@@ -147,6 +149,22 @@ export function createBapScmProvider(
     await refresh();
   }
 
+  /** 批量提交一组文件到云端。 */
+  async function commitChanges(changes: Change[], comment = ''): Promise<void> {
+    if (changes.length === 0) {
+      void vscode.window.showWarningMessage('BAP: 没有更改可提交');
+      return;
+    }
+    await sdk.code.saveChanges(changes, comment);
+    await refresh();
+  }
+
+  /** 批量更新一组文件：从云端拉取最新版覆盖本地（新增文件删除本地）。 */
+  async function updateChanges(changes: Change[]): Promise<void> {
+    await sdk.discardAll(changes);
+    await refresh();
+  }
+
   /** 一键更新所有变更：从云端取最新版覆盖本地/新增删除，再刷新。 */
   async function updateAll(): Promise<void> {
     await sdk.discardAll(lastChanges);
@@ -203,6 +221,8 @@ export function createBapScmProvider(
     getDecorations: () => decoMap,
     commitFile,
     updateFile,
+    commitChanges,
+    updateChanges,
     updateAll,
     commit,
     dispose() {

@@ -3,6 +3,20 @@ import type { Status } from '@bap/sdk';
 
 export type ScmStatus = Status;
 
+/** resource 组 id（createResourceGroup 的 id）→ 变更状态。 */
+export function groupToStatus(id: string): Status | undefined {
+  switch (id) {
+    case 'added':
+      return 'ADDED';
+    case 'modified':
+      return 'MODIFIED';
+    case 'deleted':
+      return 'DELETED_LOCALLY';
+    default:
+      return undefined;
+  }
+}
+
 /** status → 资源管理器角标（badge + 颜色名 + tooltip）。 */
 export interface FileDecoSpec {
   badge: string;
