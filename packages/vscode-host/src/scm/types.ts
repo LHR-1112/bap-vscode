@@ -125,8 +125,11 @@ export function parseBapOriginalUri(uriPath: string, query: Record<string, strin
   isResource: boolean;
   relativePath: string;
 } {
-  const relPath = uriPath.replace(/^bap-original:\/\/bap\//, '');
-  const rel = (decodeURIComponent(relPath) || query.rel || '').replace(/^\//, '');
+  // 优先用 query.rel（authority：Change.relativePath，相对 src/<folder> 或 src/res）。
+  // uriPath 的 path 段只是 URI 唯一标识（相对 workspace），可能带 src/core / src/res 前缀，
+  // 不能用于定位云端文件，否则资源/Java 会因路径多前缀而查不到云端原版、diff 整份变新增。
+  const pathRel = decodeURIComponent(uriPath.replace(/^bap-original:\/\/bap\//, ''));
+  const rel = (query.rel || pathRel).replace(/^\//, '');
   return {
     folder: query.folder || '',
     isResource: query.res === 'true',

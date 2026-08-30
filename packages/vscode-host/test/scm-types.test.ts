@@ -80,4 +80,20 @@ describe('scm/types 纯函数', () => {
     expect(parsed.folder).toBe('res');
     expect(parsed.relativePath).toBe('a/b.txt');
   });
+
+  it('parseBapOriginalUri 优先 query.rel（path 段可能是 workspace 相对路径，勿用于定位云端）', () => {
+    // openDiff/quickDiff 生成的 URI：path 段是相对 workspace（含 src/res 前缀），query.rel 才是相对 src/res 的权威路径
+    const q = new URLSearchParams();
+    q.set('folder', 'res');
+    q.set('res', 'true');
+    q.set('rel', 'pt/config/QyWxNoticeConfig.json');
+    const uri = `bap-original://bap/${encodeURIComponent('src/res/pt/config/QyWxNoticeConfig.json')}?${q.toString()}`;
+    const u = new URL(uri);
+    const query: Record<string, string> = {};
+    u.searchParams.forEach((v, k) => (query[k] = v));
+    const parsed = parseBapOriginalUri(u.pathname, query);
+    expect(parsed.relativePath).toBe('pt/config/QyWxNoticeConfig.json');
+    expect(parsed.isResource).toBe(true);
+    expect(parsed.folder).toBe('res');
+  });
 });
