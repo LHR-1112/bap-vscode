@@ -329,14 +329,17 @@ public class BridgeMain {
     }
 
     /**
-     * 进度/回调控制器：CProgressProxy 会把服务器的 sendProcess(percent, …) 委托到这里，
-     * 我们转发给 TS 显示进度；其余范围/取消方法空实现。
+     * 进度/回调控制器：CProgressProxy 会把服务器的 setMaximum/getMaximum/sendProcess 委托到这里。
+     * 我们记录服务器设置的进度范围并转发进度给 TS；getMaximum 返回真实值，避免服务器因范围 0 提前终止流。
      */
     static final class GuiProgress implements ProgressControllerFEIntf {
-        public void setMaximum(int v) { }
-        public void setMinimum(int v) { }
-        public int getMinimum() { return 0; }
-        public int getMaximum() { return 0; }
+        private int max = 100;
+        private int min = 0;
+
+        public void setMaximum(int v) { this.max = v; }
+        public void setMinimum(int v) { this.min = v; }
+        public int getMaximum() { return max; }
+        public int getMinimum() { return min; }
         public void reset() { }
         public void sendProcess(int percent, String message, boolean b) { sendProgress(percent, message); }
         public void sendProcess(int percent, String message, boolean b, Object o) { sendProgress(percent, message); }

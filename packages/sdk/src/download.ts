@@ -71,7 +71,7 @@ const isJavaVersion8 = (javaBin: string): boolean => {
 export function writeJavaSettings(destDir: string, jdkPath?: string): void {
   const vscodeDir = path.join(destDir, '.vscode');
   fs.mkdirSync(vscodeDir, { recursive: true });
-  const runtimes: Array<{ name: string; path?: string }> = [{ name: 'JavaSE-1.8' }];
+  const runtimes: Array<{ name: string; path?: string; default?: boolean }> = [{ name: 'JavaSE-1.8', default: true }];
   if (jdkPath) runtimes[0].path = jdkPath;
   const settings = {
     'java.configuration.runtimes': runtimes,
