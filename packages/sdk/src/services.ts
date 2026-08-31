@@ -5,6 +5,7 @@ import { loadDevelop, writeDevelop } from './develop';
 import { refreshChanges } from './refresh';
 import { buildCommitPackage, commitCode } from './commit';
 import { addRelocateHistory, type RelocateProfile } from './relocate';
+import { syncLibs, type SyncProgress, type SyncResult } from './libs';
 import type {
   Change,
   CJavaCode,
@@ -59,6 +60,8 @@ export interface BapSdk {
   };
   /** 丢弃变更：把变更还原到云端（MODIFIED/DELETED 用云端原版覆盖，ADDED 删除本地）。 */
   discardAll(changes: Change[]): Promise<void>;
+  /** 更新依赖：同步 <workspaceRoot>/lib 到云端（按 md5 更新 + 删除云端无的本地 lib）。 */
+  syncLibs(onProgress?: (p: SyncProgress) => void, onLog?: (msg: string) => void): Promise<SyncResult>;
   disconnect(): Promise<void>;
 }
 
@@ -229,6 +232,11 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
         session = null;
         develop = null;
       },
+    },
+
+    async syncLibs(onProgress, onLog) {
+      const projectUuid = await ensureProjectUuid();
+      return syncLibs(workspaceRoot, projectUuid, rpc, onProgress, onLog);
     },
 
     async disconnect() {

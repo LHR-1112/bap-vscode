@@ -209,7 +209,16 @@ public class BridgeMain {
         }
 
         Method method = findMethod(service.getClass(), methodName, args);
-        Object result = method.invoke(service, coerceArgs(method, args));
+        Object[] coerced = coerceArgs(method, args);
+
+        // export* 方法返回大 zip（lib 同步：exportPlatformJars/exportProjectJars/exportPluginJars/
+        // exportModelFile/exportOpenSource；发布：exportProject2Plugin），服务端比对/打包耗时可能远超默认
+        // 超时（120s）。临时超时只对下一次调用生效，故在此紧邻调用前放宽。
+        if (methodName.startsWith("export")) {
+            CRpcAdapter.setTempTimeout(30L * 24 * 60 * 60 * 1000);
+        }
+
+        Object result = method.invoke(service, coerced);
 
         // 登录类方法返回 CSession -> 置入全局会话上下文（与生产插件一致），后续 call 自动携带
         if (result instanceof CSession) {

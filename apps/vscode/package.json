@@ -110,6 +110,12 @@
         "title": "文件历史",
         "icon": "$(history)",
         "category": "BAP"
+      },
+      {
+        "command": "bapIde.scm.updateLibs",
+        "title": "更新依赖",
+        "icon": "$(package)",
+        "category": "BAP"
       }
     ],
     "configuration": {
@@ -155,6 +161,11 @@
           "when": "scmProvider == bap"
         },
         {
+          "command": "bapIde.scm.updateLibs",
+          "group": "navigation@7",
+          "when": "scmProvider == bap"
+        },
+        {
           "command": "bapIde.scm.refresh",
           "group": "2_main@1",
           "when": "scmProvider == bap"
@@ -182,6 +193,11 @@
         {
           "command": "bapIde.scm.projectHistory",
           "group": "2_main@6",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.updateLibs",
+          "group": "2_main@7",
           "when": "scmProvider == bap"
         }
       ],

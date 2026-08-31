@@ -258,6 +258,33 @@ export function activateScm(
         await openHistoryView('file', sdk, context, remoteKey);
       }),
     ),
+    vscode.commands.registerCommand('bapIde.scm.updateLibs', async () =>
+      safe('bapIde.scm.updateLibs', async () => {
+        log.debug('触发 updateLibs');
+        const msg = await vscode.window.showWarningMessage(
+          '确定更新依赖？将按云端 md5 更新本地 lib，并删除云端已不存在的本地 lib 包。',
+          { modal: true },
+          '更新',
+        );
+        if (msg !== '更新') return;
+        let lastIncr = 0;
+        const r = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: '更新依赖', cancellable: true },
+          async (prog) => {
+            const res = await sdk.syncLibs(
+              (p) => {
+                const inc = Math.max(0, Math.round((p.current / p.total) * 100) - lastIncr);
+                lastIncr += inc;
+                prog.report({ message: p.message, increment: inc });
+              },
+              (m) => log.debug(`[updateLibs] ${m}`),
+            );
+            return res;
+          },
+        );
+        void vscode.window.setStatusBarMessage(`BAP: 已更新依赖（${r.updated} 更新，${r.deleted} 删除）`, 5000);
+      }),
+    ),
   );
 
   return subscriptions;
