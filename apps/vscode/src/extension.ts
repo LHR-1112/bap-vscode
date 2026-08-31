@@ -128,6 +128,7 @@ export function activate(context: vscode.ExtensionContext): void {
       rpc,
       workspaceRoot: root,
       onLog: (m) => log.appendLine(`[sdk] ${m}`),
+      javaHome: vscode.workspace.getConfiguration('bapIde').get<string>('java8Path')?.trim() || undefined,
       cloudSnapshotTtlMs: vscode.workspace.getConfiguration('bapIde').get<number>('refreshTtlMs') ?? 30000,
     });
 

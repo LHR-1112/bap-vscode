@@ -116,6 +116,16 @@
         "title": "更新依赖",
         "icon": "$(package)",
         "category": "BAP"
+      },
+      {
+        "command": "bapIde.scm.compileProject",
+        "title": "编译项目（本地）",
+        "category": "BAP"
+      },
+      {
+        "command": "bapIde.scm.compileFile",
+        "title": "编译单类（云端）",
+        "category": "BAP"
       }
     ],
     "configuration": {
@@ -204,6 +214,11 @@
           "command": "bapIde.scm.updateLibs",
           "group": "2_main@7",
           "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.compileProject",
+          "group": "2_main@8",
+          "when": "scmProvider == bap"
         }
       ],
       "scm/resourceState/context": [
@@ -251,6 +266,11 @@
           "command": "bapIde.scm.fileHistory",
           "group": "navigation",
           "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.compileFile",
+          "group": "navigation",
+          "when": "scmProvider == bap"
         }
       ],
       "scm/resourceGroup/context": [
@@ -268,6 +288,13 @@
           "command": "bapIde.scm.commitGroup",
           "group": "inline@3",
           "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "bapIde.scm.compileFile",
+          "group": "compile@1",
+          "when": "resourceLangId == java"
         }
       ]
     }

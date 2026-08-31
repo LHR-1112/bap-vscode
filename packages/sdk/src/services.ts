@@ -6,6 +6,7 @@ import { refreshChanges, listSrcFolders, normalizeCloudMap, isNoFolderException 
 import { buildCommitPackage, commitCode } from './commit';
 import { addRelocateHistory, type RelocateProfile } from './relocate';
 import { syncLibs, type SyncProgress, type SyncResult } from './libs';
+import { compileLocalProject, type CompileResult } from './compile';
 import type {
   Change,
   CJavaCode,
@@ -17,6 +18,7 @@ import type {
   DevelopConfig,
   FileDto,
   JavaDto,
+  LvProblem,
   RpcInvoker,
   VersionNode,
 } from './types';
@@ -29,6 +31,8 @@ export interface BapSdkOptions {
   workspaceRoot: string;
   /** 业务日志回调（宿主接到「BAP IDE」输出通道）。 */
   onLog?: (msg: string) => void;
+  /** JDK 根目录（本地编译用其 javac，来自 bapIde.java8Path 设置项）。 */
+  javaHome?: string;
   /** 云端快照 TTL（毫秒）：自动刷新在 TTL 内复用云端快照比对、不重查云端。默认 10000。 */
   cloudSnapshotTtlMs?: number;
 }
@@ -69,6 +73,11 @@ export interface BapSdk {
   discardAll(changes: Change[]): Promise<void>;
   /** 更新依赖：同步 <workspaceRoot>/lib 到云端（按 md5 更新 + 删除云端无的本地 lib）。 */
   syncLibs(onProgress?: (p: SyncProgress) => void, onLog?: (msg: string) => void): Promise<SyncResult>;
+  /** 编译：本地 javac 编译当前工程；或云端单类编译（返回诊断）。 */
+  compile: {
+    project(opts?: { clean?: boolean }): Promise<CompileResult>;
+    singleCode(fullClass: string, code: string, useCache?: boolean): Promise<LvProblem[]>;
+  };
   disconnect(): Promise<void>;
 }
 
@@ -312,6 +321,32 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
     async syncLibs(onProgress, onLog) {
       const projectUuid = await ensureProjectUuid();
       return syncLibs(workspaceRoot, projectUuid, rpc, onProgress, onLog);
+    },
+
+    compile: {
+      async project(opts) {
+        log(`[compile.project] 开始（本地 javac）`);
+        const result = await compileLocalProject({ workspaceRoot, ...opts, jdkPath: options.javaHome, onLog: log });
+        log(`[compile.project] ${result.success ? '成功' : '失败'}，源码=${result.sourceFiles}`);
+        return result;
+      },
+      async singleCode(fullClass, code, useCache = false) {
+        log(`[compile.singleCode] 开始，fullClass=${fullClass}`);
+        const projectUuid = await ensureProjectUuid();
+        const lastDot = fullClass.lastIndexOf('.');
+        const mainClass = lastDot > 0 ? fullClass.slice(lastDot + 1) : fullClass;
+        const javaPackage = lastDot > 0 ? fullClass.slice(0, lastDot) : '';
+        // 注意：compileSingleCode 的 CJavaCode 需 masterKey（=projectUuid），
+        // 发 "projectUuid" 键会被桥 Gson 丢弃（getter-only）。返回诊断数组。
+        const problems = (await rpc.call('compileSingleCode', {
+          masterKey: projectUuid,
+          mainClass,
+          javaPackage,
+          code,
+        }, useCache)) as LvProblem[];
+        log(`[compile.singleCode] 完成，诊断=${problems.length}`);
+        return problems ?? [];
+      },
     },
 
     async disconnect() {

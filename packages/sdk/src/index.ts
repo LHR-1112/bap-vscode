@@ -11,6 +11,8 @@ export { scanFolder, toFullClass, dirToPackage } from './file-scanner';
 export { loadRelocateHistory, saveRelocateHistory, addRelocateHistory, removeRelocateHistory } from './relocate';
 export { syncLibs, scanLibMd5, LIB_TIMEOUT_MS } from './libs';
 export type { SyncProgress, SyncResult, LibMd5 } from './libs';
+export { compileLocalProject, resolveProjectLayout } from './compile';
+export type { ProjectLayout, CompileResult } from './compile';
 export { downloadProject, detectJdk8, writeJavaSettings, DOWNLOAD_TIMEOUT_MS } from './download';
 export type { DownloadOptions } from './download';
 
@@ -28,5 +30,6 @@ export type {
   Change,
   CommitResult,
   VersionNode,
+  LvProblem,
 } from './types';
 export type { RelocateProfile } from './relocate';

@@ -50,6 +50,8 @@ export interface CJavaCode {
   owner?: string;
   /** 保留但不指望穿透（桥 Gson 字段反射会丢弃 getter-only 的 projectUuid）。 */
   projectUuid?: string;
+  /** 桥用：承载 projectUuid（CJavaCode.setProjectUuid → masterKey）。 */
+  masterKey?: string;
   mainClass: string;
   javaPackage: string;
   name?: string;
@@ -58,6 +60,20 @@ export interface CJavaCode {
   lastWriter?: string;
   codeMd5?: string;
   saveTime?: number;
+}
+
+/** 单类编译诊断（compileSingleCode 返回的 LvProblem）。fileName=char[]→number[]。 */
+export interface LvProblem {
+  fileName?: number[];
+  id?: number;
+  startPosition?: number;
+  endPosition?: number;
+  line?: number; // 1-based
+  arguments?: string[];
+  message?: string;
+  isError?: boolean;
+  isWarn?: boolean;
+  categoryID?: number;
 }
 
 /** 资源文件（送服务端 CResFileDto 的 JSON 子集，fileBin 为 base64）。 */

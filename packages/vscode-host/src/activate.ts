@@ -1,7 +1,8 @@
 // 激活 BAP SCM：创建 SCM provider + 云端原版 provider + 文件角标 + 注册命令。
 import * as vscode from 'vscode';
 import * as path from 'path';
-import type { BapSdk, CJavaProjectDto, Change, RelocateProfile } from '@bap/sdk';
+import * as fs from 'fs';
+import type { BapSdk, CJavaProjectDto, Change, LvProblem, RelocateProfile } from '@bap/sdk';
 import { addRelocateHistory, loadDevelop, loadRelocateHistory, removeRelocateHistory } from '@bap/sdk';
 import { createBapScmProvider, type BapScmProviderHandle } from './scm/bap-scm-provider';
 import { registerOriginalProvider } from './scm/original-provider';
@@ -9,6 +10,9 @@ import { groupToStatus } from './scm/types';
 import { BapFileDecorationProvider, registerFileDecoration } from './scm/file-decoration';
 import { registerHistoryContentProvider } from './history/history-provider';
 import { openHistoryView } from './history/history-view';
+
+// 单类（云端）编译的诊断集合：把 LvProblem 标到编辑器对应行/区间
+const compileDiag = vscode.languages.createDiagnosticCollection('bapCompile');
 
 export interface ActivateScmOptions {
   autoRefresh?: boolean;
@@ -299,9 +303,110 @@ export function activateScm(
         void vscode.window.setStatusBarMessage(`BAP: 已更新依赖（${r.updated} 更新，${r.deleted} 删除）`, 5000);
       }),
     ),
+    vscode.commands.registerCommand('bapIde.scm.compileProject', async () =>
+      safe('bapIde.scm.compileProject', async () => {
+        log.debug('触发 compileProject');
+        const msg = await vscode.window.showWarningMessage(
+          '确定编译项目（本地）？将用 JDK javac 编译当前工程 src/** 到 bin/（不连服务器）。',
+          { modal: true },
+          '编译',
+        );
+        if (msg !== '编译') return;
+        const r = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: '编译项目（本地）' },
+          async (prog) => {
+            prog.report({ message: '编译中…' });
+            return sdk.compile.project();
+          },
+        );
+        if (r.success) {
+          log.debug(`[compileProject] 完成，源码=${r.sourceFiles} 资源=${r.resourceFiles}`);
+          void vscode.window.setStatusBarMessage(`BAP: 编译完成（${r.sourceFiles} 个源文件）`, 5000);
+        } else {
+          log.error(`compileProject 失败: ${r.errorCode}\n${r.compilerOutput}`);
+          void vscode.window.showErrorMessage(`编译失败（${r.errorCode}）: ${r.compilerOutput || '未知原因'}`);
+        }
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.scm.compileFile', async (arg?: unknown) =>
+      safe('bapIde.scm.compileFile', async () => {
+        // SCM 文件项右键传 resource state；编辑器右键菜单传选中的 Uri。统一解析到文件绝对路径。
+        const change = resolveChange(arg);
+        const absPath = change?.absolutePath ?? extractFsPath(arg);
+        log.debug(`compileFile: absPath=${absPath ?? '(未找到)'}`);
+        if (!absPath) return;
+        if (!absPath.toLowerCase().endsWith('.java')) {
+          void vscode.window.showInformationMessage('BAP: 请选择 Java 源文件进行编译');
+          return;
+        }
+        const fullClass = change?.fullClass ?? deriveFullClass(absPath, workspaceRoot);
+        if (!fullClass) {
+          void vscode.window.showInformationMessage('BAP: 无法解析类名，请在工作区 src/ 下的 .java 文件上操作');
+          return;
+        }
+        const content = fs.readFileSync(absPath, 'utf8');
+        const problems = await sdk.compile.singleCode(fullClass, content, false);
+        const diags = problems.map((p) =>
+          new vscode.Diagnostic(
+            problemRange(content, p.line, p.startPosition, p.endPosition),
+            p.message ?? '',
+            p.isError ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning,
+          ),
+        );
+        compileDiag.set(vscode.Uri.file(absPath), diags);
+        const errors = problems.filter((p) => p.isError).length;
+        const warns = problems.filter((p) => p.isWarn).length;
+        log.debug(`[compileFile] 完成，error=${errors} warn=${warns}`);
+        void vscode.window.setStatusBarMessage(
+          errors || warns ? `BAP: 编译 ${errors} 错误 / ${warns} 警告` : 'BAP: 编译通过',
+          5000,
+        );
+        // 打开该文件并聚焦（让诊断波浪线可见）
+        await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(absPath), { preview: true });
+      }),
+    ),
   );
 
   return subscriptions;
+}
+
+/** 计算诊断在编辑器中的 range：行/列基于源码绝对偏移换算。 */
+function problemRange(code: string, line?: number, start?: number, end?: number): vscode.Range {
+  const row = Math.max(0, (line ?? 1) - 1);
+  const lines = code.split(/\r?\n/);
+  let lineStart = 0;
+  for (let i = 0; i < row && i < lines.length; i++) lineStart += lines[i].length + 1;
+  const chStart = start !== undefined ? Math.max(0, start - lineStart) : 0;
+  const chEnd = end !== undefined ? Math.max(chStart, end - lineStart) : (lines[row]?.length ?? chStart);
+  const pos = (ch: number): vscode.Position => new vscode.Position(row, ch);
+  return new vscode.Range(pos(Math.min(chStart, chEnd)), pos(Math.max(chStart, chEnd)));
+}
+
+/** 从命令参数里提取文件绝对路径（兼容 Uri / {fsPath} / {resourceUri:{fsPath}} / {absolutePath}）。 */
+function extractFsPath(arg: unknown): string | undefined {
+  if (!arg || typeof arg !== 'object') return undefined;
+  const a = arg as { fsPath?: unknown; resourceUri?: { fsPath?: unknown }; absolutePath?: unknown };
+  if (typeof a.fsPath === 'string') return a.fsPath;
+  if (a.resourceUri && typeof (a.resourceUri as { fsPath?: unknown }).fsPath === 'string') {
+    return (a.resourceUri as { fsPath: string }).fsPath;
+  }
+  if (typeof a.absolutePath === 'string') return a.absolutePath;
+  return undefined;
+}
+
+/** 从文件绝对路径推导 fullClass（src/<folder>/<pkg>/<Class>.java → 剥 src/ 与 folder → 包.类）。 */
+function deriveFullClass(absPath: string, workspaceRoot: string): string | undefined {
+  let rel = absPath.startsWith(workspaceRoot)
+    ? absPath.slice(workspaceRoot.length).replace(/^[/\\]+/, '')
+    : absPath.replace(/^[/\\]+/, '');
+  rel = rel.split(path.sep).join('/');
+  if (rel.startsWith('src/')) rel = rel.slice(4);
+  const parts = rel.split('/').filter((p) => p && p !== '.');
+  if (!parts.length) return undefined;
+  // 第一段是 src 一级子目录（folder，如 core/res），不是包路径，剥掉
+  const pkgParts = parts.length > 1 ? parts.slice(1) : parts;
+  const segments = pkgParts.map((p) => p.replace(/\.java$/i, '')).filter(Boolean);
+  return segments.length ? segments.join('.') : undefined;
 }
 
 /** 打开 diff：左侧 = bap-original（云端原版），右侧 = 本地文件。 */
