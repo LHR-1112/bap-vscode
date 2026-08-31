@@ -25,5 +25,6 @@ export type {
   CommitPackage,
   Change,
   CommitResult,
+  VersionNode,
 } from './types';
 export type { RelocateProfile } from './relocate';

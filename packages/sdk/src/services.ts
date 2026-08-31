@@ -15,6 +15,7 @@ import type {
   CResFileDto,
   DevelopConfig,
   RpcInvoker,
+  VersionNode,
 } from './types';
 import type { SessionDto as SDto } from '@bap/rpc';
 
@@ -32,6 +33,14 @@ export interface BapSdk {
     list(): Promise<CJavaProjectDto[]>;
     get(): Promise<CJavaProjectDto>;
     getFolders(): Promise<CJavaFolderDto[]>;
+  };
+  /** 历史：项目版本 / 某版本文件 / 文件版本 / 历史内容。 */
+  history: {
+    queryVersionList(): Promise<VersionNode[]>;
+    queryVersionDetail(versionNo: number): Promise<VersionNode[]>;
+    queryFileHistory(remoteKey: string): Promise<VersionNode[]>;
+    getHistoryCode(uuid: string): Promise<CJavaCode | null>;
+    getHistoryFile(uuid: string): Promise<CResFileDto | null>;
   };
   code: {
     save(comment?: string): Promise<CommitResult>;
@@ -95,6 +104,35 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       async getFolders() {
         const projectUuid = await ensureProjectUuid();
         return rpc.call('getFolders', projectUuid) as Promise<CJavaFolderDto[]>;
+      },
+    },
+
+    history: {
+      async queryVersionList() {
+        const projectUuid = await ensureProjectUuid();
+        return rpc.call('queryVersionList', projectUuid) as Promise<VersionNode[]>;
+      },
+      async queryVersionDetail(versionNo) {
+        const projectUuid = await ensureProjectUuid();
+        return rpc.call('queryVersionDetail', projectUuid, versionNo, true) as Promise<VersionNode[]>;
+      },
+      async queryFileHistory(remoteKey) {
+        const projectUuid = await ensureProjectUuid();
+        return rpc.call('queryFileHistory', projectUuid, remoteKey) as Promise<VersionNode[]>;
+      },
+      async getHistoryCode(uuid) {
+        try {
+          return (await rpc.call('getHistoryCode', uuid)) as CJavaCode | null;
+        } catch {
+          return null;
+        }
+      },
+      async getHistoryFile(uuid) {
+        try {
+          return (await rpc.call('getHistoryFile', uuid)) as CResFileDto | null;
+        } catch {
+          return null;
+        }
       },
     },
 

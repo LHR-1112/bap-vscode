@@ -7,6 +7,8 @@ import { createBapScmProvider, type BapScmProviderHandle } from './scm/bap-scm-p
 import { registerOriginalProvider } from './scm/original-provider';
 import { groupToStatus } from './scm/types';
 import { BapFileDecorationProvider, registerFileDecoration } from './scm/file-decoration';
+import { registerHistoryContentProvider } from './history/history-provider';
+import { openHistoryView } from './history/history-view';
 
 export interface ActivateScmOptions {
   autoRefresh?: boolean;
@@ -44,6 +46,7 @@ export function activateScm(
   const bapScm = createBapScmProvider(sdk, workspaceRoot, { autoRefresh: opts.autoRefresh, iconDir });
   log.debug('registerOriginalProvider...');
   const originalProvider = registerOriginalProvider(sdk);
+  const historyContent = registerHistoryContentProvider(sdk);
   const fileDeco = new BapFileDecorationProvider();
   const fileDecoDisposable = registerFileDecoration(fileDeco);
   log.debug('providers 就绪');
@@ -51,6 +54,7 @@ export function activateScm(
   subscriptions.push(
     { dispose: () => bapScm.dispose() },
     originalProvider,
+    historyContent,
     fileDecoDisposable,
   );
 
@@ -237,6 +241,21 @@ export function activateScm(
       safe('bapIde.scm.redirect', async () => {
         log.debug('触发 redirect');
         await runRedirect(sdk, bapScm, workspaceRoot, log);
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.scm.projectHistory', async () =>
+      safe('bapIde.scm.projectHistory', async () => {
+        log.debug('触发 projectHistory');
+        await openHistoryView('project', sdk, context);
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.scm.fileHistory', async (arg?: unknown) =>
+      safe('bapIde.scm.fileHistory', async () => {
+        const change = resolveChange(arg);
+        log.debug(`fileHistory: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
+        if (!change) return;
+        const remoteKey = change.isResource ? change.relativePath : (change.fullClass ?? change.relativePath);
+        await openHistoryView('file', sdk, context, remoteKey);
       }),
     ),
   );

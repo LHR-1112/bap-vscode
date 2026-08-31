@@ -108,6 +108,20 @@ export interface Change {
   md5: string;
 }
 
+/** 历史版本节点（版本列表 / 某版本内文件 / 文件历史）。key 点分=Java fullClass，含 '/'=资源。 */
+export interface VersionNode {
+  versionNo?: number;
+  seqNo?: number;
+  key?: string;
+  dataBin?: string;
+  dataType?: string;
+  deleteFlag?: boolean;
+  comments?: string;
+  commiter?: string; // 单 t（服务端字段拼写如此）
+  commitTime?: number; // epoch 毫秒
+  uuid?: string;
+}
+
 /** code save 的装配结果。 */
 export interface CommitResult {
   changes: Change[];

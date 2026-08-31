@@ -98,6 +98,18 @@
         "title": "重定向",
         "icon": "$(location)",
         "category": "BAP"
+      },
+      {
+        "command": "bapIde.scm.projectHistory",
+        "title": "项目历史",
+        "icon": "$(history)",
+        "category": "BAP"
+      },
+      {
+        "command": "bapIde.scm.fileHistory",
+        "title": "文件历史",
+        "icon": "$(history)",
+        "category": "BAP"
       }
     ],
     "configuration": {
@@ -138,6 +150,11 @@
           "when": "scmProvider == bap"
         },
         {
+          "command": "bapIde.scm.projectHistory",
+          "group": "navigation@6",
+          "when": "scmProvider == bap"
+        },
+        {
           "command": "bapIde.scm.refresh",
           "group": "2_main@1",
           "when": "scmProvider == bap"
@@ -161,6 +178,11 @@
           "command": "bapIde.scm.redirect",
           "group": "2_main@5",
           "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.projectHistory",
+          "group": "2_main@6",
+          "when": "scmProvider == bap"
         }
       ],
       "scm/resourceState/context": [
@@ -180,6 +202,11 @@
           "when": "scmProvider == bap"
         },
         {
+          "command": "bapIde.scm.fileHistory",
+          "group": "inline@4",
+          "when": "scmProvider == bap"
+        },
+        {
           "command": "bapIde.scm.openDiff",
           "group": "navigation",
           "when": "scmProvider == bap"
@@ -196,6 +223,11 @@
         },
         {
           "command": "bapIde.scm.commitFile",
+          "group": "navigation",
+          "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.fileHistory",
           "group": "navigation",
           "when": "scmProvider == bap"
         }
@@ -235,5 +267,8 @@
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.0"
+  },
+  "dependencies": {
+    "lit": "^3.3.3"
   }
 }
