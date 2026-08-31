@@ -4,7 +4,12 @@
   "description": "面向 BAP 云工程的 VS Code 插件",
   "version": "1.0.0",
   "publisher": "bap",
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LHR-1112/bap-vscode.git"
+  },
+  "icon": "icon.png",
   "private": true,
   "engines": {
     "vscode": "^1.90.0"
