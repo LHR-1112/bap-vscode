@@ -94,8 +94,6 @@ export function createBapScmProvider(
       changes = await sdk.refresh(force);
       applyToGroups(changes);
     } catch (e) {
-      // 不静默：把真实原因（.develop 缺失 / 连接失败 / folder 不匹配）展示给用户。
-      // 保留上一次的 changes，避免因一次抖动清空整个 SCM。
       const msg = e instanceof Error ? e.message : String(e);
       void vscode.window.setStatusBarMessage(`BAP: 刷新失败 - ${msg}`, 6000);
       return changes;

@@ -83,7 +83,10 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
   const SNAP_TTL_MS = options.cloudSnapshotTtlMs ?? 30000;
   let cloudSnapshot: { t: number; data: Record<string, Record<string, FileDto | JavaDto>> } | null = null;
 
-  async function fetchCloudSnapshot(projectUuid: string, force: boolean): Promise<Record<string, Record<string, FileDto | JavaDto>>> {
+  async function fetchCloudSnapshot(
+    projectUuid: string,
+    force: boolean,
+  ): Promise<Record<string, Record<string, FileDto | JavaDto>>> {
     if (!force && cloudSnapshot && Date.now() - cloudSnapshot.t < SNAP_TTL_MS) {
       return cloudSnapshot.data;
     }
@@ -126,7 +129,7 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
     },
 
     async refresh(force = false) {
-      log(force ? '[refresh] 手动刷新' : '[refresh] 自动刷新');
+      log('[refresh] 开始');
       const projectUuid = await ensureProjectUuid();
       const snapshot = await fetchCloudSnapshot(projectUuid, force);
       const changes = await refreshChanges(projectUuid, srcRoot, rpc, snapshot);
