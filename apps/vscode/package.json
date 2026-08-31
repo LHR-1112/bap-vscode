@@ -131,6 +131,11 @@
         "command": "bapIde.scm.debugClass",
         "title": "启动调试",
         "category": "BAP"
+      },
+      {
+        "command": "bapIde.scm.testProject",
+        "title": "单元测试",
+        "category": "BAP"
       }
     ],
     "configuration": {
@@ -281,6 +286,11 @@
           "command": "bapIde.scm.debugClass",
           "group": "navigation",
           "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.testProject",
+          "group": "navigation",
+          "when": "scmProvider == bap"
         }
       ],
       "scm/resourceGroup/context": [
@@ -308,6 +318,11 @@
         },
         {
           "command": "bapIde.scm.debugClass",
+          "group": "compile@1",
+          "when": "resourceLangId == java"
+        },
+        {
+          "command": "bapIde.scm.testProject",
           "group": "compile@1",
           "when": "resourceLangId == java"
         }

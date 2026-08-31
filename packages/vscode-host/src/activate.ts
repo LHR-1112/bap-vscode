@@ -15,6 +15,8 @@ import { openHistoryView } from './history/history-view';
 const compileDiag = vscode.languages.createDiagnosticCollection('bapCompile');
 // 启动调试的独立输出通道（不混进 sdk 日志满的「BAP IDE」）
 const debugChannel = vscode.window.createOutputChannel('BAP 调试');
+// 单元测试的独立输出通道
+const testChannel = vscode.window.createOutputChannel('BAP 单元测试');
 
 export interface ActivateScmOptions {
   autoRefresh?: boolean;
@@ -392,6 +394,34 @@ export function activateScm(
         debugChannel.appendLine(`返回文本 (Result Text): ${r.resultText}`);
         void vscode.window.setStatusBarMessage(
           r.isError ? 'BAP: 调试运行异常' : 'BAP: 调试完成',
+          5000,
+        );
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.scm.testProject', async (arg?: unknown) =>
+      safe('bapIde.scm.testProject', async () => {
+        const change = resolveChange(arg);
+        const absPath = change?.absolutePath ?? extractFsPath(arg);
+        let selectClass: string | undefined;
+        if (absPath && absPath.toLowerCase().endsWith('.java')) {
+          selectClass = change?.fullClass ?? deriveFullClass(absPath, workspaceRoot) ?? undefined;
+        }
+        log.debug(`testProject: selectClass=${selectClass ?? '(全部)'}`);
+        testChannel.show(true);
+        testChannel.appendLine(`[test] 开始编译 + 运行单元测试（${selectClass ?? '全部'}）…`);
+        const r = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: '单元测试' },
+          async (prog) => {
+            prog.report({ message: '编译中…' });
+            const res = await sdk.test.project({ selectClass, onOutput: (line) => testChannel.appendLine(line) });
+            return res;
+          },
+        );
+        testChannel.appendLine('--------------------');
+        testChannel.appendLine(`Total: ${r.total} | Passed: ${r.passed} | Failed: ${r.failed} | Skipped: ${r.skipped} | Exit code: ${r.exitCode}`);
+        log.debug(`[testProject] 完成，pass=${r.passed} fail=${r.failed} skip=${r.skipped}`);
+        void vscode.window.setStatusBarMessage(
+          r.failed ? `BAP: 单元测试 ${r.failed} 失败 / ${r.passed} 通过` : `BAP: 单元测试通过（${r.passed}）`,
           5000,
         );
       }),

@@ -143,6 +143,18 @@ function resolveJavac(jdkPath?: string): string {
   return bin;
 }
 
+/** 定位 java 命令（运行 JUnit 用）。优先 javaHome，其次 JAVA_HOME，最后 PATH。 */
+export function resolveJava(jdkPath?: string): string {
+  const bin = process.platform === 'win32' ? 'java.exe' : 'java';
+  if (jdkPath && fs.existsSync(path.join(jdkPath, 'bin', bin))) return path.join(jdkPath, 'bin', bin);
+  const home = process.env.JAVA_HOME;
+  if (home) {
+    const p = path.join(home, 'bin', bin);
+    if (fs.existsSync(p)) return p;
+  }
+  return bin;
+}
+
 // ---- 资源拷贝 ----
 
 function copyResources(resourceFiles: string[], outputDir: string, layout: ProjectLayout): string[] {

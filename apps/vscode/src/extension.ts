@@ -129,6 +129,7 @@ export function activate(context: vscode.ExtensionContext): void {
       workspaceRoot: root,
       onLog: (m) => log.appendLine(`[sdk] ${m}`),
       javaHome: vscode.workspace.getConfiguration('bapIde').get<string>('java8Path')?.trim() || undefined,
+      junitJarPath: path.join(context.extensionPath, 'resources', 'junit', 'junit-platform-console-standalone-1.11.0.jar'),
       cloudSnapshotTtlMs: vscode.workspace.getConfiguration('bapIde').get<number>('refreshTtlMs') ?? 30000,
     });
 

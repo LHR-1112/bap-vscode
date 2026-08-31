@@ -6,8 +6,9 @@ import { refreshChanges, listSrcFolders, normalizeCloudMap, isNoFolderException 
 import { buildCommitPackage, commitCode, allocUuidWithUnderline } from './commit';
 import { addRelocateHistory, type RelocateProfile } from './relocate';
 import { syncLibs, type SyncProgress, type SyncResult } from './libs';
-import { compileLocalProject, type CompileResult } from './compile';
+import { compileLocalProject, resolveProjectLayout, resolveJava, type CompileResult } from './compile';
 import { buildDebugCode } from './debug';
+import { runUnitTests, type TestOptions, type TestResult } from './test';
 import type {
   Change,
   CJavaCode,
@@ -35,6 +36,8 @@ export interface BapSdkOptions {
   onLog?: (msg: string) => void;
   /** JDK 根目录（本地编译用其 javac，来自 bapIde.java8Path 设置项）。 */
   javaHome?: string;
+  /** junit-platform-console-standalone.jar 路径（单元测试用）。 */
+  junitJarPath?: string;
   /** 云端快照 TTL（毫秒）：自动刷新在 TTL 内复用云端快照比对、不重查云端。默认 10000。 */
   cloudSnapshotTtlMs?: number;
 }
@@ -83,6 +86,10 @@ export interface BapSdk {
   /** 启动调试：云端运行单个 Java 类（trace 经 onTrace 逐行回调）。 */
   debug: {
     start(fullClass: string, code: string, onTrace?: (line: string) => void): Promise<DebugResult>;
+  };
+  /** 单元测试：先本地 javac 编译，再用 JUnit 跑 bin/ 下的测试类。 */
+  test: {
+    project(opts?: TestOptions): Promise<TestResult>;
   };
   disconnect(): Promise<void>;
 }
@@ -396,6 +403,44 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
         const resultText = (await rpc.call('getResultText', debugKey)) as string;
         log(`[debug.start] 完成，status=${status} trace=${traceCount}`);
         return { debugKey, status, isError: status === 3, result, resultText, traceCount };
+      },
+    },
+
+    test: {
+      async project(opts) {
+        log('[test.project] 开始（先编译，再 JUnit）');
+        if (!options.junitJarPath) throw new Error('缺少 junit-platform-console-standalone.jar（应在扩展 resources/junit 下）');
+        // 1) 编译出 bin/
+        const compile = await compileLocalProject({ workspaceRoot, jdkPath: options.javaHome, onLog: log });
+        if (!compile.success) {
+          log(`[test.project] 编译失败，需先编译通过`);
+          throw new Error(`编译失败（${compile.errorCode ?? ''}）: ${compile.compilerOutput || ''}`);
+        }
+        // 2) 布局（bin + libs）
+        const layout = resolveProjectLayout(workspaceRoot);
+        const projectUuid = await ensureProjectUuid();
+        const { develop } = await ensureConnected();
+        const javaBin = resolveJava(options.javaHome);
+        const bapProps = {
+          BAP_URI: develop.uri,
+          BAP_USER: develop.user,
+          BAP_PASSWORD: develop.pwd,
+          BAP_PROJECT: projectUuid,
+          SILENT_BAP_PROJECT_PATH: workspaceRoot,
+          SILENT_BAP_USER_PASSWORD: develop.pwd,
+        };
+        const result = await runUnitTests({
+          workspaceRoot,
+          binDir: layout.outputDir,
+          libFiles: layout.libraryFiles,
+          junitJarPath: options.junitJarPath,
+          javaBin,
+          bapProps,
+          test: opts,
+          onLog: log,
+        });
+        log(`[test.project] 完成，total=${result.total} pass=${result.passed} fail=${result.failed} skip=${result.skipped} exit=${result.exitCode}`);
+        return result;
       },
     },
 
