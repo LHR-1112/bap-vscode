@@ -12,7 +12,7 @@
     "compile": "npm run compile -w bap-ide-vscode",
     "watch": "npm run watch -w bap-ide-vscode",
     "build": "npm run build -w bap-ide-vscode",
-    "package": "npm run package -w bap-ide-vscode",
+    "package": "node apps/vscode/scripts/package-dist.js",
     "build:bridge": "npm run build -w @bap/java-bridge",
     "typecheck": "tsc --noEmit"
   },

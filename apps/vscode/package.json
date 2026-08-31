@@ -2,7 +2,7 @@
   "name": "bap-ide-vscode",
   "displayName": "BAP IDE",
   "description": "面向 BAP 云工程的 VS Code 插件",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "bap",
   "license": "UNLICENSED",
   "private": true,
@@ -335,7 +335,7 @@
     "build": "npm run build:bridge && node scripts/stage-bridge.js && node esbuild.js --production",
     "build:bridge": "npm run build -w @bap/java-bridge",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package"
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@bap/core": "0.1.0",
