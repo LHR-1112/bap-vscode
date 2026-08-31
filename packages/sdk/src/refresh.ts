@@ -143,6 +143,13 @@ export async function refreshChanges(
 
       // Java 文件
       const content = cachedText(lf.absolutePath);
+      const stdMd5 = md5String(content.replace(/\r\n/g, '\n'));
+      if (cloudDto.md5 && cloudDto.md5.toLowerCase() === stdMd5) {
+        // 本地与云端一致 -> NORMAL。直接判定，跳过 getJavaCode（否则每次 refresh 每个 Java 文件都拉云端原文，慢）。
+        // 仅当不一致才拉云端原文做 loose 兜底。
+        changes.push({ ...lf, folder: folderName, status: 'NORMAL', md5: md5String(content) });
+        continue;
+      }
       const remoteCode = await remoteJavaCode(projectUuid, cloudDto as JavaDto, lf.fullClass!, invoker);
       const status = computeJavaStatus({ local: content, cloudMd5: cloudDto.md5, remoteCode });
       changes.push({ ...lf, folder: folderName, status, md5: md5String(content) });
