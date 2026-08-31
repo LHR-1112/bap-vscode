@@ -20,68 +20,96 @@
     "commands": [
       {
         "command": "bapIde.showVersion",
-        "title": "BAP: Show Version"
+        "title": "显示版本",
+        "category": "BAP"
+      },
+      {
+        "command": "bapIde.downloadProject",
+        "title": "下载工程",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.refresh",
         "title": "刷新",
-        "icon": "$(refresh)"
+        "icon": "$(refresh)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.commit",
         "title": "提交全部",
-        "icon": "$(cloud-upload)"
+        "icon": "$(cloud-upload)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.publish",
         "title": "发布插件",
-        "icon": "$(rocket)"
+        "icon": "$(rocket)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.openDiff",
-        "title": "打开 Diff"
+        "title": "打开 Diff",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.openFile",
         "title": "打开文件",
-        "icon": "$(go-to-file)"
+        "icon": "$(go-to-file)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.commitFile",
         "title": "提交该文件",
-        "icon": "$(cloud-upload)"
+        "icon": "$(cloud-upload)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.updateFile",
         "title": "更新该文件",
-        "icon": "$(cloud-download)"
+        "icon": "$(cloud-download)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.openAllChanges",
         "title": "打开更改",
-        "icon": "$(diff-multiple)"
+        "icon": "$(diff-multiple)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.updateGroup",
         "title": "更新该组",
-        "icon": "$(cloud-download)"
+        "icon": "$(cloud-download)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.commitGroup",
         "title": "提交该组",
-        "icon": "$(cloud-upload)"
+        "icon": "$(cloud-upload)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.updateAll",
         "title": "更新全部",
-        "icon": "$(cloud-download)"
+        "icon": "$(cloud-download)",
+        "category": "BAP"
       },
       {
         "command": "bapIde.scm.redirect",
         "title": "重定向",
-        "icon": "$(location)"
+        "icon": "$(location)",
+        "category": "BAP"
       }
     ],
+    "configuration": {
+      "title": "BAP IDE",
+      "properties": {
+        "bapIde.java8Path": {
+          "type": "string",
+          "default": "",
+          "description": "JDK 1.8 安装路径。下载工程后会写入 .vscode/settings.json（java.configuration.runtimes）。留空则自动检测。"
+        }
+      }
+    },
     "menus": {
       "scm/title": [
         {

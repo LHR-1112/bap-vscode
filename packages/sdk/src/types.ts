@@ -9,6 +9,10 @@ export type Status = 'NORMAL' | 'MODIFIED' | 'ADDED' | 'DELETED_LOCALLY';
 export interface RpcInvoker {
   connect(uri: string, user: string, pwd: string): Promise<SessionDto>;
   call<T = JsonValue>(method: string, ...args: JsonValue[]): Promise<T>;
+  callWithTimeout?<T = JsonValue>(timeoutMs: number, method: string, ...args: JsonValue[]): Promise<T>;
+  onProgress?(cb: (p: { percent: number; message: string }) => void): void;
+  /** 原始请求：method 为桥顶层方法（如 'download'），params 为 JSON 数组。 */
+  request?(method: string, params: JsonValue[], timeoutMs?: number): Promise<JsonValue>;
   disconnect(): Promise<void>;
   close(): Promise<void>;
 }

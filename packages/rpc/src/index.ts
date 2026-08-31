@@ -26,12 +26,16 @@ export class RpcClient {
   private _proc: BridgeProcess;
   private _connectTimeoutMs: number;
   private _exitHandlers: Array<(code: number | null) => void> = [];
+  private _progressHandlers: Array<(p: { percent: number; message: string }) => void> = [];
 
   constructor(options: RpcClientOptions) {
     this._proc = new BridgeProcess(options.launch);
     this._connectTimeoutMs = options.connectTimeoutMs ?? 60_000;
     this._proc.on('exit', (code) => {
       for (const h of this._exitHandlers) h(code);
+    });
+    this._proc.on('progress', (p) => {
+      for (const h of this._progressHandlers) h(p);
     });
   }
 
@@ -63,6 +67,21 @@ export class RpcClient {
   call<T = JsonValue>(method: string, ...args: JsonValue[]): Promise<T> {
     this.ensureStarted();
     return this._proc.request('call', [method, args]) as Promise<T>;
+  }
+
+  /** 带显式超时的原子方法转发（下载整包等长耗时调用）。 */
+  callWithTimeout<T = JsonValue>(timeoutMs: number, method: string, ...args: JsonValue[]): Promise<T> {
+    this.ensureStarted();
+    return this._proc.request('call', [method, args], timeoutMs) as Promise<T>;
+  }
+
+  /** 订阅进度事件（Java 桥 download 期间推送）。返回退订函数。 */
+  onProgress(cb: (p: { percent: number; message: string }) => void): () => void {
+    this._progressHandlers.push(cb);
+    return () => {
+      const i = this._progressHandlers.indexOf(cb);
+      if (i >= 0) this._progressHandlers.splice(i, 1);
+    };
   }
 
   ping(): Promise<boolean> {

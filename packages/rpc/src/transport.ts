@@ -15,7 +15,7 @@ export class BridgeRpcError extends Error {
   }
 }
 
-export class BridgeProcess extends EventEmitter<{ exit: [number | null]; log: [string] }> {
+export class BridgeProcess extends EventEmitter<{ exit: [number | null]; log: [string]; progress: [{ percent: number; message: string }] }> {
   private _child: ChildProcessWithoutNullStreams | null = null;
   private _pending = new Map<number, PendingEntry>();
   private _writeQueue: Buffer[] = [];
@@ -112,6 +112,12 @@ export class BridgeProcess extends EventEmitter<{ exit: [number | null]; log: [s
     } catch {
       // 非 JSON 行 -> 当作日志处理（防御），丢给 log
       this.emit('log', trimmed);
+      return;
+    }
+    // 进度帧：无 id、带 progress 字段（Java 桥 download 期间推送）
+    const prog = (resp as unknown as { id?: unknown; progress?: { percent?: unknown; message?: unknown } }).progress;
+    if (resp.id === undefined && prog) {
+      this.emit('progress', { percent: Number(prog.percent ?? 0), message: String(prog.message ?? '') });
       return;
     }
     if (resp.id === undefined) {

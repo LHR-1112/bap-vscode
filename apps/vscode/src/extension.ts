@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { BAP_IDE_NAME, BAP_IDE_VERSION } from '@bap/core';
 import { createRpcClient, type BridgeLaunchConfig } from '@bap/rpc';
-import { createBapSdk } from '@bap/sdk';
+import { createBapSdk, downloadProject, detectJdk8, writeJavaSettings, type CJavaProjectDto } from '@bap/sdk';
 import { activateScm } from '@bap/vscode-host';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -17,6 +18,92 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // Java 桥子进程 launch（下载工程在无打开的工作区时也可用）
+  const launch: BridgeLaunchConfig = {
+    classpath: [path.join(context.extensionPath, 'assets', 'bridge', 'lib', '*')],
+    mainClass: 'com.bap.dev.BridgeMain',
+  };
+
+  // 下载工程：命令行入口（不依赖当前打开的工作区）。流式下载 + 解压 + 写 .develop（Java 桥完成），
+  // 再写 .vscode/settings.json（JDK1.8），最后替换窗口打开。
+  context.subscriptions.push(
+    vscode.commands.registerCommand('bapIde.downloadProject', async () => {
+      try {
+        const uri = await vscode.window.showInputBox({
+          prompt: 'BAP Server ws 地址', placeHolder: 'ws://host:port', ignoreFocusOut: true,
+          validateInput: (v) => (v && v.trim() ? undefined : '必填'),
+        });
+        if (!uri) return;
+        const user = await vscode.window.showInputBox({
+          prompt: '账号', ignoreFocusOut: true,
+          validateInput: (v) => (v && v.trim() ? undefined : '必填'),
+        });
+        if (!user) return;
+        const pwd = await vscode.window.showInputBox({
+          prompt: '密码', password: true, ignoreFocusOut: true,
+          validateInput: (v) => (v ? undefined : '必填'),
+        });
+        if (!pwd) return;
+
+        const rpc = createRpcClient({ launch });
+        try {
+          await rpc.connect(uri.trim(), user.trim(), pwd);
+          const projects = (await rpc.call('getAllProjects')) as CJavaProjectDto[];
+          if (projects.length === 0) {
+            void vscode.window.showInformationMessage('BAP: 该服务器上没有工程');
+            return;
+          }
+          const picked = await vscode.window.showQuickPick(
+            projects.map((p) => ({ label: p.name, description: p.uuid, detail: p.uuid })),
+            { placeHolder: '选择要下载的工程', matchOnDescription: true, matchOnDetail: true },
+          );
+          if (!picked) return;
+          const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          if (!root) {
+            void vscode.window.showWarningMessage('BAP: 请先打开一个文件夹，再下载工程');
+            return;
+          }
+          const destDir = root; // 直接下载到 VS Code 项目根目录，不再建工程名子目录
+          let last = 0;
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `下载工程 ${picked.label}`, cancellable: true },
+            async (prog, token) => {
+              token.onCancellationRequested(() => {
+                void rpc.disconnect();
+                // 取消时顺手清理临时 zip（Java 侧 finally 也会删，双保险）
+                try {
+                  fs.rmSync(path.join(destDir, 'checkout_temp.zip'), { force: true });
+                } catch {
+                  /* ignore */
+                }
+              });
+              await downloadProject({
+                rpc, uri: uri.trim(), user: user.trim(), pwd,
+                projectUuid: picked.description, destDir,
+                onProgress: (p) => {
+                  const inc = Math.max(0, p.percent - last);
+                  last = p.percent;
+                  prog.report({ increment: inc, message: `已下载 ${p.percent}%` });
+                },
+              });
+            },
+          );
+          const configured = vscode.workspace.getConfiguration('bapIde').get<string>('java8Path');
+          const jdk = configured && configured.trim() ? configured.trim() : detectJdk8();
+          writeJavaSettings(destDir, jdk);
+          if (!jdk) void vscode.window.showWarningMessage('BAP: 未检测到 JDK 1.8，已写入 JavaSE-1.8 配置，请在插件设置中填 bapIde.java8Path 或手动补 path');
+          await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), false);
+        } finally {
+          await rpc.close();
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log.appendLine(`[downloadProject] 失败: ${msg}`);
+        void vscode.window.showErrorMessage(`下载工程失败，详见输出面板「BAP IDE」: ${msg}`);
+      }
+    }),
+  );
+
   try {
     // 无打开的 workspace folder -> 无法定位 BAP 工程根，SCM 不启用
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -28,10 +115,6 @@ export function activate(context: vscode.ExtensionContext): void {
     log.appendLine(`[activate] workspaceRoot = ${root}`);
 
     // Java 桥子进程：用扩展内捆绑的 bridge jar 资产
-    const launch: BridgeLaunchConfig = {
-      classpath: [path.join(context.extensionPath, 'assets', 'bridge', 'lib', '*')],
-      mainClass: 'com.bap.dev.BridgeMain',
-    };
     log.appendLine(`[activate] launch bridge, classpath=${launch.classpath[0]}`);
 
     const rpc = createRpcClient({ launch });

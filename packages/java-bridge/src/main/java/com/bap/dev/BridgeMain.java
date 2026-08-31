@@ -1,23 +1,35 @@
 package com.bap.dev;
 
 import bap.java.CJavaCenterIntf;
+import bap.java.CJavaFolderDto;
 import com.cdao.CDaoConst;
 import com.cdao.mgr.CSession;
 import com.leavay.common.gson.Gson;
 import com.leavay.common.gson.JsonSyntaxException;
 import com.leavay.common.util.GsonUtil;
+import com.leavay.common.util.ProgressCtrl.ProgressControllerFEIntf;
+import com.leavay.common.util.ProgressCtrl.crpc.CProgressProxy;
+import com.leavay.common.util.ProgressCtrl.crpc.IProgress;
+import com.leavay.common.util.ZipUtils;
 import com.leavay.nio.crpc.CRpcAdapter;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -112,6 +124,57 @@ public class BridgeMain {
                 Object[] args = req.params.length > 1 ? asArray(req.params[1]) : new Object[0];
                 Object result = invokeAtomic(client, method, args);
                 writeOk(req.id, GSON.toJson(result));
+                break;
+            }
+            case "download": {
+                String uuid = str(req.params, 0);
+                String destDir = str(req.params, 1);
+                String adminTool = str(req.params, 2); // 可空
+
+                CJavaCenterIntf service = client.getService();
+                if (service == null) {
+                    throw new IllegalStateException("bridge not connected; call connect() first");
+                }
+
+                Set<String> folderSet = new HashSet<>();
+                for (CJavaFolderDto f : service.getFolders(uuid)) folderSet.add(f.getName());
+
+                File dest = new File(destDir);
+                dest.mkdirs();
+                File tmpZip = new File(dest, "checkout_temp.zip");
+                try {
+                    try (FileOutputStream fos = new FileOutputStream(tmpZip)) {
+                        Consumer<byte[]> chunk = data -> {
+                            try {
+                                fos.write(data);
+                                fos.flush();
+                            } catch (java.io.IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        };
+                        // 临时超时只对"下一次"调用生效，必须紧邻 streamExportProject，
+                        // 否则会被上面的 getFolders 消耗、流式调用又回到默认短超时。
+                        CRpcAdapter.setTempTimeout(30L * 24 * 60 * 60 * 1000);
+                        IProgress<byte[]> prog = CProgressProxy.build(new GuiProgress(), chunk);
+                        service.streamExportProject(prog, uuid, folderSet, null);
+                    }
+                    ZipUtils.unzip(tmpZip.getAbsolutePath(), dest.getAbsolutePath());
+
+                    String at = (adminTool != null && !adminTool.isEmpty()) ? adminTool : null;
+                    if (at == null) {
+                        try { at = service.getDevAdminTool(); } catch (Throwable ignore) { }
+                    }
+                    if (at == null || at.isEmpty()) at = "bap.client.BapMainFrame";
+
+                    String xml = String.format("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<Development Project=\"%s\" Uri=\"%s\" AdminTool=\"%s\" User=\"%s\" Password=\"%s\" LocalNioPort=\"-1\"/>",
+                            uuid, client.getUri(), at, client.getUser(), client.getPwd());
+                    Files.write(new File(dest, ".develop").toPath(), xml.getBytes(StandardCharsets.UTF_8));
+
+                    writeOk(req.id, "{\"destDir\":\"" + destDir + "\"}");
+                } finally {
+                    // 无论成功/取消/异常，都清理临时 zip
+                    if (tmpZip.exists()) tmpZip.delete();
+                }
                 break;
             }
             case "disconnect": {
@@ -255,6 +318,36 @@ public class BridgeMain {
             String msg = message == null ? "" : message.replace("\"", "\\\"");
             OUT.println("{\"id\":" + id + ",\"ok\":false,\"error\":{\"name\":\"" + name + "\",\"message\":\"" + msg + "\"}}");
         }
+    }
+
+    /** 向 TS 推送下载进度帧（无 id，供 BridgeProcess 识别为 progress 事件）。 */
+    private static void sendProgress(int percent, String message) {
+        synchronized (OUT_LOCK) {
+            String msg = message == null ? "" : message;
+            OUT.println("{\"progress\":{\"percent\":" + percent + ",\"message\":" + GSON.toJson(msg) + "}}");
+        }
+    }
+
+    /**
+     * 进度/回调控制器：CProgressProxy 会把服务器的 sendProcess(percent, …) 委托到这里，
+     * 我们转发给 TS 显示进度；其余范围/取消方法空实现。
+     */
+    static final class GuiProgress implements ProgressControllerFEIntf {
+        public void setMaximum(int v) { }
+        public void setMinimum(int v) { }
+        public int getMinimum() { return 0; }
+        public int getMaximum() { return 0; }
+        public void reset() { }
+        public void sendProcess(int percent, String message, boolean b) { sendProgress(percent, message); }
+        public void sendProcess(int percent, String message, boolean b, Object o) { sendProgress(percent, message); }
+        public void setMessage(String m, boolean b) { }
+        public void sendStopProcess() { }
+        public boolean isCanceled() { return false; }
+        public boolean isTerminated() { return false; }
+        public void showMessageDialog(String a, String b, int c) { }
+        public void showMessageDialog(String a, String b) { }
+        public int showConfirmDialog(String a, String b, int c) { return 0; }
+        public int showConfirmDialog(String a, String b, int c, int d) { return 0; }
     }
 
     private static void redirectSystemOutToStderr() {
