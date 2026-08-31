@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { BAP_IDE_NAME, BAP_IDE_VERSION } from '@bap/core';
 import { createRpcClient, type BridgeLaunchConfig } from '@bap/rpc';
 import { createBapSdk, downloadProject, detectJdk8, writeJavaSettings, type CJavaProjectDto } from '@bap/sdk';
-import { activateScm } from '@bap/vscode-host';
+import { activateScm, checkLatestRelease, isNewer, DEFAULT_FEED } from '@bap/vscode-host';
 
 export function activate(context: vscode.ExtensionContext): void {
   // BAP IDE 输出通道：所有诊断日志写到「输出 → BAP IDE」，便于排查激活/命令/连接问题。
@@ -18,6 +18,42 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(`${BAP_IDE_NAME} v${BAP_IDE_VERSION}`);
     }),
   );
+
+  // 检查更新（手动 vsix 安装不支持自动更新，这里做「感知更新」）
+  const cfg = vscode.workspace.getConfiguration('bapIde');
+  context.subscriptions.push(
+    vscode.commands.registerCommand('bapIde.checkUpdate', async () => {
+      const feed = cfg.get<string>('updateFeedUrl') || DEFAULT_FEED;
+      log.appendLine('[checkUpdate] 检查中…');
+      const info = await checkLatestRelease(feed, BAP_IDE_VERSION);
+      if (!info) {
+        void vscode.window.showInformationMessage('BAP: 无法获取更新信息');
+        return;
+      }
+      if (info.hasUpdate) {
+        const go = await vscode.window.showInformationMessage(
+          `发现新版本 ${info.latest}（当前 ${info.current}），是否前往下载？`,
+          '前往下载',
+        );
+        if (go === '前往下载' && info.url) await vscode.env.openExternal(vscode.Uri.parse(info.url));
+      } else {
+        void vscode.window.showInformationMessage(`BAP: 已是最新版本（${info.current}）`);
+      }
+    }),
+  );
+
+  // 启动后台检查一次（仅在有新版时提示；可用设置关闭）
+  if (cfg.get<boolean>('checkUpdateOnStartup') !== false) {
+    const feed = cfg.get<string>('updateFeedUrl') || DEFAULT_FEED;
+    void (async () => {
+      const info = await checkLatestRelease(feed, BAP_IDE_VERSION);
+      if (info?.hasUpdate) {
+        void vscode.window.showInformationMessage(
+          `BAP IDE 有新版本 ${info.latest}（当前 ${info.current}），在命令面板运行「检查更新」查看下载。`,
+        );
+      }
+    })();
+  }
 
   // Java 桥子进程 launch（下载工程在无打开的工作区时也可用）
   const launch: BridgeLaunchConfig = {

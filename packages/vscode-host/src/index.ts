@@ -22,6 +22,8 @@ export type { FileDecoSpec, ScmDecoSpec } from './scm/types';
 
 export { registerHistoryContentProvider } from './history/history-provider';
 export { openHistoryView, openHistoryDiff } from './history/history-view';
+export { checkLatestRelease, isNewer, DEFAULT_FEED } from './update-check';
+export type { UpdateInfo } from './update-check';
 
 // 便捷：给定 sdk 和 workspaceRoot 一次性激活（供 apps/vscode 调用）。
 export async function activateBapScm(

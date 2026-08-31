@@ -141,6 +141,11 @@
         "command": "bapIde.scm.testProject",
         "title": "单元测试",
         "category": "BAP"
+      },
+      {
+        "command": "bapIde.checkUpdate",
+        "title": "检查更新",
+        "category": "BAP"
       }
     ],
     "configuration": {
@@ -155,6 +160,16 @@
           "type": "number",
           "default": 30000,
           "description": "自动刷新复用云端快照的间隔（毫秒）。此间隔内的自动刷新不重新查询云端，只做本地比对；手动刷新始终强制拉取云端。默认 30000。"
+        },
+        "bapIde.updateFeedUrl": {
+          "type": "string",
+          "default": "",
+          "description": "检查更新的来源 URL（GitHub Release latest API 或同格式 JSON）。留空使用 GitHub Release。"
+        },
+        "bapIde.checkUpdateOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动时检查更新（仅在有新版本时提示）。"
         }
       }
     },
