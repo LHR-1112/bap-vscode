@@ -3,10 +3,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { loadDevelop, writeDevelop } from './develop';
 import { refreshChanges, listSrcFolders, normalizeCloudMap, isNoFolderException } from './refresh';
-import { buildCommitPackage, commitCode } from './commit';
+import { buildCommitPackage, commitCode, allocUuidWithUnderline } from './commit';
 import { addRelocateHistory, type RelocateProfile } from './relocate';
 import { syncLibs, type SyncProgress, type SyncResult } from './libs';
 import { compileLocalProject, type CompileResult } from './compile';
+import { buildDebugCode } from './debug';
 import type {
   Change,
   CJavaCode,
@@ -15,6 +16,7 @@ import type {
   CommitPackage,
   CommitResult,
   CResFileDto,
+  DebugResult,
   DevelopConfig,
   FileDto,
   JavaDto,
@@ -77,6 +79,10 @@ export interface BapSdk {
   compile: {
     project(opts?: { clean?: boolean }): Promise<CompileResult>;
     singleCode(fullClass: string, code: string, useCache?: boolean): Promise<LvProblem[]>;
+  };
+  /** 启动调试：云端运行单个 Java 类（trace 经 onTrace 逐行回调）。 */
+  debug: {
+    start(fullClass: string, code: string, onTrace?: (line: string) => void): Promise<DebugResult>;
   };
   disconnect(): Promise<void>;
 }
@@ -346,6 +352,50 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
         }, useCache)) as LvProblem[];
         log(`[compile.singleCode] 完成，诊断=${problems.length}`);
         return problems ?? [];
+      },
+    },
+
+    debug: {
+      async start(fullClass, code, onTrace) {
+        log(`[debug.start] 开始，fullClass=${fullClass}`);
+        const { develop } = await ensureConnected();
+        const lastDot = fullClass.lastIndexOf('.');
+        const className = lastDot > 0 ? fullClass.slice(lastDot + 1) : fullClass;
+        const origPackage = lastDot > 0 ? fullClass.slice(0, lastDot) : '';
+        const debugPackage = origPackage ? `${origPackage}.debug` : 'debug';
+        const debugCode = buildDebugCode(code, debugPackage);
+
+        // 注意：不设 projectUuid/masterKey（服务端纯靠 package+name+code 编译运行）
+        const debugKey = (await rpc.call(
+          'startDebugJava',
+          { javaPackage: debugPackage, name: className, mainClass: className, code: debugCode, uuid: allocUuidWithUnderline() },
+          develop.uri,
+        )) as string;
+        log(`[debug.start] debugKey=${debugKey}`);
+
+        let status = 0;
+        let traceCount = 0;
+        const maxPollMs = 60_000;
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < maxPollMs) {
+          const traces = (await rpc.call('popTrace', debugKey)) as string[];
+          traceCount += traces.length;
+          traces.forEach((t) => onTrace?.(t));
+          status = (await rpc.call('getStatus', debugKey)) as number;
+          if (status === 2 || status === 3) break;
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        if (status !== 2 && status !== 3) {
+          try { await rpc.call('terminateDebug', debugKey, 5000); } catch { /* ignore */ }
+          throw new Error(`调试超时（${maxPollMs}ms 未完成）`);
+        }
+        const traces = (await rpc.call('popTrace', debugKey)) as string[];
+        traceCount += traces.length;
+        traces.forEach((t) => onTrace?.(t));
+        const result = await rpc.call('getResult', debugKey);
+        const resultText = (await rpc.call('getResultText', debugKey)) as string;
+        log(`[debug.start] 完成，status=${status} trace=${traceCount}`);
+        return { debugKey, status, isError: status === 3, result, resultText, traceCount };
       },
     },
 

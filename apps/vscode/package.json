@@ -126,6 +126,11 @@
         "command": "bapIde.scm.compileFile",
         "title": "编译单类（云端）",
         "category": "BAP"
+      },
+      {
+        "command": "bapIde.scm.debugClass",
+        "title": "启动调试",
+        "category": "BAP"
       }
     ],
     "configuration": {
@@ -271,6 +276,11 @@
           "command": "bapIde.scm.compileFile",
           "group": "navigation",
           "when": "scmProvider == bap"
+        },
+        {
+          "command": "bapIde.scm.debugClass",
+          "group": "navigation",
+          "when": "scmProvider == bap"
         }
       ],
       "scm/resourceGroup/context": [
@@ -293,6 +303,11 @@
       "editor/context": [
         {
           "command": "bapIde.scm.compileFile",
+          "group": "compile@1",
+          "when": "resourceLangId == java"
+        },
+        {
+          "command": "bapIde.scm.debugClass",
           "group": "compile@1",
           "when": "resourceLangId == java"
         }

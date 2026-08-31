@@ -76,6 +76,16 @@ export interface LvProblem {
   categoryID?: number;
 }
 
+/** 云端运行单个类的调试结果。 */
+export interface DebugResult {
+  debugKey: string;
+  status: number; // 0 准备/1 运行/2 完成/3 错误
+  isError: boolean;
+  result: unknown;
+  resultText: string;
+  traceCount: number;
+}
+
 /** 资源文件（送服务端 CResFileDto 的 JSON 子集，fileBin 为 base64）。 */
 export interface CResFileDto {
   uuid?: string;

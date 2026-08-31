@@ -256,6 +256,9 @@ public class BridgeMain {
                 if (isNumberLike(a)) score += 1;
                 if (t == String.class && a instanceof String) score += 1;
                 if (t == int.class || t == long.class || t == double.class) score += 1;
+            } else if (t == java.net.URI.class && a instanceof String) {
+                // URI 可由字符串构造（coerce 支持），给高分以区分 startDebugJava 的两个重载 (CJavaCode,URI)/(CJavaCode,HostPort)
+                score += 2;
             } else if (t.isAssignableFrom(a == null ? Object.class : a.getClass())) {
                 score += 2;
             }
@@ -289,6 +292,10 @@ public class BridgeMain {
             if (target == byte.class) return ((Number) gsonNumber(arg)).byteValue();
             if (target == short.class) return ((Number) gsonNumber(arg)).shortValue();
             if (target == char.class) return String.valueOf(arg).charAt(0);
+        }
+        // java.net.URI：Gson 无默认适配器，从字符串构造（startDebugJava 第二参）
+        if (java.net.URI.class.equals(target)) {
+            return java.net.URI.create(String.valueOf(arg));
         }
         // 自定义 bean / 集合 / Map：用 Gson 从 JSON 元素反序列化
         try {

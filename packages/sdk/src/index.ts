@@ -13,6 +13,7 @@ export { syncLibs, scanLibMd5, LIB_TIMEOUT_MS } from './libs';
 export type { SyncProgress, SyncResult, LibMd5 } from './libs';
 export { compileLocalProject, resolveProjectLayout } from './compile';
 export type { ProjectLayout, CompileResult } from './compile';
+export { buildDebugCode } from './debug';
 export { downloadProject, detectJdk8, writeJavaSettings, DOWNLOAD_TIMEOUT_MS } from './download';
 export type { DownloadOptions } from './download';
 
@@ -31,5 +32,6 @@ export type {
   CommitResult,
   VersionNode,
   LvProblem,
+  DebugResult,
 } from './types';
 export type { RelocateProfile } from './relocate';

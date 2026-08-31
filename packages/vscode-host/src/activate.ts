@@ -13,6 +13,8 @@ import { openHistoryView } from './history/history-view';
 
 // 单类（云端）编译的诊断集合：把 LvProblem 标到编辑器对应行/区间
 const compileDiag = vscode.languages.createDiagnosticCollection('bapCompile');
+// 启动调试的独立输出通道（不混进 sdk 日志满的「BAP IDE」）
+const debugChannel = vscode.window.createOutputChannel('BAP 调试');
 
 export interface ActivateScmOptions {
   autoRefresh?: boolean;
@@ -365,6 +367,35 @@ export function activateScm(
         await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(absPath), { preview: true });
       }),
     ),
+    vscode.commands.registerCommand('bapIde.scm.debugClass', async (arg?: unknown) =>
+      safe('bapIde.scm.debugClass', async () => {
+        const change = resolveChange(arg);
+        const absPath = change?.absolutePath ?? extractFsPath(arg);
+        log.debug(`debugClass: absPath=${absPath ?? '(未找到)'}`);
+        if (!absPath || !absPath.toLowerCase().endsWith('.java')) {
+          void vscode.window.showInformationMessage('BAP: 请选择 Java 源文件进行调试');
+          return;
+        }
+        const fullClass = change?.fullClass ?? deriveFullClass(absPath, workspaceRoot);
+        if (!fullClass) {
+          void vscode.window.showInformationMessage('BAP: 无法解析类名');
+          return;
+        }
+        const code = fs.readFileSync(absPath, 'utf8');
+        debugChannel.show(true);
+        debugChannel.appendLine(`[debug] 运行 ${fullClass}（云端）…`);
+        const r = await sdk.debug.start(fullClass, code, (line) => debugChannel.appendLine(line));
+        debugChannel.appendLine('--------------------');
+        debugChannel.appendLine(`调试ID (DebugKey): ${r.debugKey}`);
+        debugChannel.appendLine(`是否异常 (IsException): ${r.isError}`);
+        debugChannel.appendLine(`返回对象 (Result Object): ${previewResult(r.result)}`);
+        debugChannel.appendLine(`返回文本 (Result Text): ${r.resultText}`);
+        void vscode.window.setStatusBarMessage(
+          r.isError ? 'BAP: 调试运行异常' : 'BAP: 调试完成',
+          5000,
+        );
+      }),
+    ),
   );
 
   return subscriptions;
@@ -392,6 +423,12 @@ function extractFsPath(arg: unknown): string | undefined {
   }
   if (typeof a.absolutePath === 'string') return a.absolutePath;
   return undefined;
+}
+
+/** 把服务端返回值预览成字符串（Object → JSON；null/undefined 原样；超长截断）。 */
+function previewResult(x: unknown): string {
+  const s = x === undefined || x === null ? String(x) : typeof x === 'string' ? x : JSON.stringify(x);
+  return s.length > 2000 ? `${s.slice(0, 2000)}…` : (s ?? '');
 }
 
 /** 从文件绝对路径推导 fullClass（src/<folder>/<pkg>/<Class>.java → 剥 src/ 与 folder → 包.类）。 */
