@@ -1,6 +1,7 @@
 // BAP 历史 webview（Lit）：复刻 GitLens commit details 布局。
 // 顶部过滤栏 + commit 列表 + 选中 commit 的文件改动树。
 // 与扩展通过 acquireVsCodeApi().postMessage / window message 通信。
+/// <reference lib="dom" />
 import { LitElement, html, css } from 'lit';
 import type { TemplateResult } from 'lit';
 
