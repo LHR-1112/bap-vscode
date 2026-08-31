@@ -14,6 +14,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('bapIde.showVersion', () => {
+      log.appendLine('[showVersion] 已触发');
       void vscode.window.showInformationMessage(`${BAP_IDE_NAME} v${BAP_IDE_VERSION}`);
     }),
   );
@@ -29,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('bapIde.downloadProject', async () => {
       try {
+        log.appendLine('[downloadProject] 开始');
         const uri = await vscode.window.showInputBox({
           prompt: 'BAP Server ws 地址', placeHolder: 'ws://host:port', ignoreFocusOut: true,
           validateInput: (v) => (v && v.trim() ? undefined : '必填'),
@@ -49,6 +51,7 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           await rpc.connect(uri.trim(), user.trim(), pwd);
           const projects = (await rpc.call('getAllProjects')) as CJavaProjectDto[];
+          log.appendLine(`[downloadProject] 连接完成，工程=${projects.length}`);
           if (projects.length === 0) {
             void vscode.window.showInformationMessage('BAP: 该服务器上没有工程');
             return;
@@ -85,14 +88,17 @@ export function activate(context: vscode.ExtensionContext): void {
                   last = p.percent;
                   prog.report({ increment: inc, message: `已下载 ${p.percent}%` });
                 },
+                onLog: (m) => log.appendLine(`[downloadProject] ${m}`),
               });
             },
           );
+          log.appendLine('[downloadProject] 下载完成，写 .vscode/settings.json');
           const configured = vscode.workspace.getConfiguration('bapIde').get<string>('java8Path');
           const jdk = configured && configured.trim() ? configured.trim() : detectJdk8();
           writeJavaSettings(destDir, jdk);
           if (!jdk) void vscode.window.showWarningMessage('BAP: 未检测到 JDK 1.8，已写入 JavaSE-1.8 配置，请在插件设置中填 bapIde.java8Path 或手动补 path');
           await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), false);
+          log.appendLine(`[downloadProject] 完成，destDir=${destDir}`);
         } finally {
           await rpc.close();
         }
@@ -118,7 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
     log.appendLine(`[activate] launch bridge, classpath=${launch.classpath[0]}`);
 
     const rpc = createRpcClient({ launch });
-    const sdk = createBapSdk({ rpc, workspaceRoot: root });
+    const sdk = createBapSdk({ rpc, workspaceRoot: root, onLog: (m) => log.appendLine(`[sdk] ${m}`) });
 
     // 注册 SCM（createSourceControl + 资源组 + 云端 diff + 文件角标 + 命令）
     log.appendLine('[activate] 开始注册 SCM provider 与命令...');

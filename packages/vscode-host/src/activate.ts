@@ -99,7 +99,9 @@ export function activateScm(
         void vscode.window.showInformationMessage('BAP: refresh 已触发');
         const changes = await bapScm.refresh();
         fileDeco.setStatuses(new Map(changes.filter((c) => c.status !== 'NORMAL').map((c) => [c.absolutePath, c.status])));
-        void vscode.window.setStatusBarMessage(`BAP: ${changes.filter((c) => c.status !== 'NORMAL').length} 个变更`, 3000);
+        const dirty = changes.filter((c) => c.status !== 'NORMAL').length;
+        log.debug(`[refresh] 完成，变更=${dirty}`);
+        void vscode.window.setStatusBarMessage(`BAP: ${dirty} 个变更`, 3000);
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.commit', async () =>
@@ -109,6 +111,7 @@ export function activateScm(
         const comment = bapScm.sourceControl.inputBox.value || '';
         await bapScm.commit(comment);
         bapScm.sourceControl.inputBox.value = '';
+        log.debug('[commit] 完成');
         void vscode.window.setStatusBarMessage('BAP: 提交完成', 3000);
       }),
     ),
@@ -122,6 +125,7 @@ export function activateScm(
         );
         if (msg !== '发布') return;
         await sdk.publish.full();
+        log.debug('[publish] 完成');
         void vscode.window.setStatusBarMessage('BAP: 已发布插件（全量）', 3000);
       }),
     ),
@@ -130,7 +134,7 @@ export function activateScm(
         const change = resolveChange(arg);
         log.debug(`openDiff: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
-        await openDiff(change, workspaceRoot);
+        await openDiff(change, workspaceRoot, log);
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.openFile', async (arg?: unknown) =>
@@ -154,6 +158,7 @@ export function activateScm(
         const comment = bapScm.sourceControl.inputBox.value || '';
         await bapScm.commitFile(change, comment);
         bapScm.sourceControl.inputBox.value = '';
+        log.debug(`[commitFile] 完成，${change.relativePath}`);
         void vscode.window.setStatusBarMessage('BAP: 已提交该文件', 3000);
       }),
     ),
@@ -163,6 +168,7 @@ export function activateScm(
         log.debug(`updateFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
         await bapScm.updateFile(change);
+        log.debug(`[updateFile] 完成，${change.relativePath}`);
         void vscode.window.setStatusBarMessage('BAP: 已从云端更新该文件', 3000);
       }),
     ),
@@ -176,8 +182,9 @@ export function activateScm(
         }
         // 逐份打开「更改」组每个文件的 diff（左=云端原版，右=本地）
         for (const c of list) {
-          if (c.absolutePath) await openDiff(c, workspaceRoot);
+          if (c.absolutePath) await openDiff(c, workspaceRoot, log);
         }
+        log.debug(`[openAllChanges] 完成，打开 ${list.length} 个`);
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.updateGroup', async (group?: vscode.SourceControlResourceGroup) =>
@@ -201,6 +208,7 @@ export function activateScm(
         );
         if (msg !== '更新') return;
         await bapScm.updateChanges(list);
+        log.debug(`[updateGroup] 完成，${group.id} × ${list.length}`);
         void vscode.window.setStatusBarMessage('BAP: 已更新该组', 3000);
       }),
     ),
@@ -221,6 +229,7 @@ export function activateScm(
         const comment = bapScm.sourceControl.inputBox.value || '';
         await bapScm.commitChanges(list, comment);
         bapScm.sourceControl.inputBox.value = '';
+        log.debug(`[commitGroup] 完成，${group.id} × ${list.length}`);
         void vscode.window.setStatusBarMessage('BAP: 已提交该组', 3000);
       }),
     ),
@@ -234,6 +243,7 @@ export function activateScm(
         );
         if (msg !== '更新') return;
         await bapScm.updateAll();
+        log.debug('[updateAll] 完成');
         void vscode.window.showInformationMessage('BAP: 已更新所有文件');
       }),
     ),
@@ -241,12 +251,14 @@ export function activateScm(
       safe('bapIde.scm.redirect', async () => {
         log.debug('触发 redirect');
         await runRedirect(sdk, bapScm, workspaceRoot, log);
+        log.debug('[redirect] 完成');
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.projectHistory', async () =>
       safe('bapIde.scm.projectHistory', async () => {
         log.debug('触发 projectHistory');
-        await openHistoryView('project', sdk, context);
+        await openHistoryView('project', sdk, context, undefined, (m) => log.debug(m));
+        log.debug('[projectHistory] 完成');
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.fileHistory', async (arg?: unknown) =>
@@ -255,7 +267,8 @@ export function activateScm(
         log.debug(`fileHistory: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
         const remoteKey = change.isResource ? change.relativePath : (change.fullClass ?? change.relativePath);
-        await openHistoryView('file', sdk, context, remoteKey);
+        await openHistoryView('file', sdk, context, remoteKey, (m) => log.debug(m));
+        log.debug('[fileHistory] 完成');
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.updateLibs', async () =>
@@ -282,6 +295,7 @@ export function activateScm(
             return res;
           },
         );
+        log.debug(`[updateLibs] 完成，更新=${r.updated} 删除=${r.deleted}`);
         void vscode.window.setStatusBarMessage(`BAP: 已更新依赖（${r.updated} 更新，${r.deleted} 删除）`, 5000);
       }),
     ),
@@ -291,7 +305,12 @@ export function activateScm(
 }
 
 /** 打开 diff：左侧 = bap-original（云端原版），右侧 = 本地文件。 */
-async function openDiff(change: Change, workspaceRoot: string): Promise<void> {
+async function openDiff(
+  change: Change,
+  workspaceRoot: string,
+  log: { debug(msg: string): void } = { debug: () => {} },
+): Promise<void> {
+  log.debug(`[openDiff] 打开 ${change.relativePath}`);
   const q = new URLSearchParams();
   q.set('folder', change.folder);
   q.set('res', String(change.isResource));

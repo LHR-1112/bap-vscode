@@ -15,6 +15,7 @@ export interface DownloadOptions {
   destDir: string;
   adminTool?: string;
   onProgress?: (p: { percent: number; message: string }) => void;
+  onLog?: (msg: string) => void;
 }
 
 /** 下载整包长耗时，放宽超时。 */
@@ -25,12 +26,14 @@ export const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
  * 调用前 rpc 已 connect（登录并发到全局会话）；这里复用同一 rpc 发起 download。
  */
 export async function downloadProject(opts: DownloadOptions): Promise<void> {
-  const { rpc, uri, user, pwd, projectUuid, destDir, adminTool, onProgress } = opts;
+  const { rpc, uri, user, pwd, projectUuid, destDir, adminTool, onProgress, onLog } = opts;
+  onLog?.('[downloadProject] 开始');
   if (rpc.onProgress && onProgress) rpc.onProgress(onProgress);
   // 'download' 是 Java 桥顶层方法（非 CJavaCenterIntf 反射方法），须经 request 而非 call。
   const send = (rpc as RpcInvoker & { request: (m: string, p: JV[], t?: number) => Promise<JV> }).request;
   if (!send) throw new Error('rpc does not support raw request (download)');
   await send.call(rpc, 'download', [projectUuid, destDir, adminTool ?? null], DOWNLOAD_TIMEOUT_MS);
+  onLog?.(`[downloadProject] 完成，destDir=${destDir}`);
 }
 
 /** 探测本机 JDK 1.8 安装路径。检测不到返回 undefined。 */

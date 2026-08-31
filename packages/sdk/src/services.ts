@@ -25,6 +25,8 @@ export interface BapSdkOptions {
   rpc: RpcInvoker;
   /** BAP 工程根目录（含 .develop）。 */
   workspaceRoot: string;
+  /** 业务日志回调（宿主接到「BAP IDE」输出通道）。 */
+  onLog?: (msg: string) => void;
 }
 
 export interface BapSdk {
@@ -70,6 +72,7 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
   const srcRoot = path.join(workspaceRoot, 'src');
   let develop: DevelopConfig | null = null;
   let session: SDto | null = null;
+  const log = (msg: string): void => options.onLog?.(msg);
 
   async function ensureConnected(): Promise<{ develop: DevelopConfig; session: SDto; projectUuid: string }> {
     if (!develop) develop = loadDevelop(workspaceRoot);
@@ -85,14 +88,19 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
 
   return {
     async login() {
+      log('[login] 开始');
       const { develop: d, session: s } = await ensureConnected();
       const project = (await rpc.call('getProject', d.projectUuid)) as CJavaProjectDto;
+      log(`[login] 完成，project=${project.name}`);
       return { develop: d, session: s, project };
     },
 
     async refresh() {
+      log('[refresh] 开始');
       const projectUuid = await ensureProjectUuid();
-      return refreshChanges(projectUuid, srcRoot, rpc);
+      const changes = await refreshChanges(projectUuid, srcRoot, rpc);
+      log(`[refresh] 完成，变更=${changes.filter((c) => c.status !== 'NORMAL').length}`);
+      return changes;
     },
 
     project: {
@@ -112,28 +120,45 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
 
     history: {
       async queryVersionList() {
+        log('[history.queryVersionList] 开始');
         const projectUuid = await ensureProjectUuid();
-        return rpc.call('queryVersionList', projectUuid) as Promise<VersionNode[]>;
+        const list = (await rpc.call('queryVersionList', projectUuid)) as VersionNode[];
+        log(`[history.queryVersionList] 完成，版本=${list.length}`);
+        return list;
       },
       async queryVersionDetail(versionNo) {
+        log(`[history.queryVersionDetail] 开始，versionNo=${versionNo}`);
         const projectUuid = await ensureProjectUuid();
-        return rpc.call('queryVersionDetail', projectUuid, versionNo, true) as Promise<VersionNode[]>;
+        const list = (await rpc.call('queryVersionDetail', projectUuid, versionNo, true)) as VersionNode[];
+        log(`[history.queryVersionDetail] 完成，文件=${list.length}`);
+        return list;
       },
       async queryFileHistory(remoteKey) {
+        log(`[history.queryFileHistory] 开始，key=${remoteKey}`);
         const projectUuid = await ensureProjectUuid();
-        return rpc.call('queryFileHistory', projectUuid, remoteKey) as Promise<VersionNode[]>;
+        const list = (await rpc.call('queryFileHistory', projectUuid, remoteKey)) as VersionNode[];
+        log(`[history.queryFileHistory] 完成，版本=${list.length}`);
+        return list;
       },
       async getHistoryCode(uuid) {
+        log(`[history.getHistoryCode] uuid=${uuid}`);
         try {
-          return (await rpc.call('getHistoryCode', uuid)) as CJavaCode | null;
+          const code = (await rpc.call('getHistoryCode', uuid)) as CJavaCode | null;
+          log(`[history.getHistoryCode] ${code ? '命中' : '未命中'}`);
+          return code;
         } catch {
+          log(`[history.getHistoryCode] 失败`);
           return null;
         }
       },
       async getHistoryFile(uuid) {
+        log(`[history.getHistoryFile] uuid=${uuid}`);
         try {
-          return (await rpc.call('getHistoryFile', uuid)) as CResFileDto | null;
+          const dto = (await rpc.call('getHistoryFile', uuid)) as CResFileDto | null;
+          log(`[history.getHistoryFile] ${dto ? '命中' : '未命中'}`);
+          return dto;
         } catch {
+          log(`[history.getHistoryFile] 失败`);
           return null;
         }
       },
@@ -141,13 +166,19 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
 
     code: {
       async save(comment = '') {
+        log('[code.save] 开始');
         const projectUuid = await ensureProjectUuid();
         const changes = await refreshChanges(projectUuid, srcRoot, rpc);
-        return doSave(projectUuid, changes, comment, rpc);
+        const r = await doSave(projectUuid, changes, comment, rpc);
+        log(`[code.save] 完成，提交文件=${changes.filter((c) => c.status !== 'NORMAL').length}`);
+        return r;
       },
       async saveChanges(changes, comment = '') {
+        log(`[code.saveChanges] 开始，文件=${changes.length}`);
         const projectUuid = await ensureProjectUuid();
-        return doSave(projectUuid, changes, comment, rpc);
+        const r = await doSave(projectUuid, changes, comment, rpc);
+        log(`[code.saveChanges] 完成，提交文件=${changes.length}`);
+        return r;
       },
       async getRemote(fullClass) {
         const projectUuid = await ensureProjectUuid();
@@ -168,6 +199,7 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
     },
 
     async discardAll(changes) {
+      log(`[discardAll] 开始，文件=${changes.length}`);
       const projectUuid = await ensureProjectUuid();
       for (const c of changes) {
         if (c.status === 'ADDED') {
@@ -201,24 +233,32 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
     },
     publish: {
       async gray(opts) {
+        log('[publish.gray] 开始');
         const projectUuid = await ensureProjectUuid();
         await rpc.call('grayPublish', projectUuid, opts?.requireCompile ?? true);
+        log('[publish.gray] 完成');
       },
       async full(opts) {
+        log('[publish.full] 开始');
         const projectUuid = await ensureProjectUuid();
         await rpc.call('rebuildAll', projectUuid);
         await rpc.call('exportProject2Plugin', projectUuid, null, true, opts?.ignoreErrors ?? false);
+        log('[publish.full] 完成');
       },
     },
 
     redirect: {
       /** 用给定 uri/user/pwd 连接并列出该 server 上所有工程（探测用）。 */
       async probe(uri, user, pwd) {
+        log(`[redirect.probe] 开始，uri=${uri}`);
         await rpc.connect(uri, user, pwd);
-        return rpc.call('getAllProjects') as Promise<CJavaProjectDto[]>;
+        const list = (await rpc.call('getAllProjects')) as CJavaProjectDto[];
+        log(`[redirect.probe] 完成，工程=${list.length}`);
+        return list;
       },
       /** 改写 .develop + 更新历史 + 断开；下次 refresh 按新配置重连。 */
       async apply(profile) {
+        log(`[redirect.apply] 开始，project=${profile.projectName || profile.uri}`);
         writeDevelop(workspaceRoot, {
           projectUuid: profile.projectUuid,
           uri: profile.uri,
@@ -231,6 +271,7 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
         await rpc.disconnect();
         session = null;
         develop = null;
+        log('[redirect.apply] 完成');
       },
     },
 
