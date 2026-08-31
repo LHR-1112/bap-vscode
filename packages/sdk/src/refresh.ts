@@ -13,7 +13,46 @@ export function isNoFolderException(e: unknown): boolean {
   return s.includes('NoFolderException') || s.includes('NoFolder');
 }
 
-function normalizeKeys(raw: Record<string, unknown>): Record<string, FileDto> {
+// 本地扫描缓存（按 文件 mtimeMs + size 校验）。
+// 刷新最贵的是全量读 src/** 算 md5；文件未变则复用缓存，不再读盘/算 hash（安全：未变=内容未变=md5 不变），
+// 云端对比仍每次进行。
+const bytesCache = new Map<string, { m: number; s: number; v: string }>(); // 资源文件 bytes md5
+const textCache = new Map<string, { m: number; s: number; v: string }>(); // Java 文件 utf8 原文
+
+function statOf(abs: string): { m: number; s: number } {
+  const st = fs.statSync(abs);
+  return { m: st.mtimeMs, s: st.size };
+}
+
+// 资源：文件字节 md5
+function cachedBytesMd5(abs: string): string {
+  const st = statOf(abs);
+  const h = bytesCache.get(abs);
+  if (h && h.m === st.m && h.s === st.s) return h.v;
+  const v = md5Bytes(fs.readFileSync(abs));
+  bytesCache.set(abs, { ...st, v });
+  return v;
+}
+
+// Java：utf8 原文（md5 + loose 兜底都可用）
+function cachedText(abs: string): string {
+  const st = statOf(abs);
+  const h = textCache.get(abs);
+  if (h && h.m === st.m && h.s === st.s) return h.v;
+  const v = fs.readFileSync(abs, 'utf8');
+  textCache.set(abs, { ...st, v });
+  return v;
+}
+
+function cachedTextMd5(abs: string): string {
+  return md5String(cachedText(abs));
+}
+
+function sizeOf(abs: string): number {
+  return statOf(abs).s;
+}
+
+export function normalizeCloudMap(raw: Record<string, unknown>): Record<string, FileDto> {
   const out: Record<string, FileDto> = {};
   for (const [k, v] of Object.entries(raw ?? {})) {
     out[k.split(path.sep).join('/').replace(/\\/g, '/')] = (v ?? {}) as FileDto;
@@ -21,13 +60,49 @@ function normalizeKeys(raw: Record<string, unknown>): Record<string, FileDto> {
   return out;
 }
 
+/** 列出 <root>/src 下的 folder 目录名（res 及 Java 目录）。 */
+export function listSrcFolders(srcRoot: string): string[] {
+  try {
+    return fs
+      .readdirSync(srcRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+}
+
+/** 取单个 folder 的云端快照（归一化路径键 + NoFolder 兜底）。 */
+async function fetchCloudMap(
+  projectUuid: string,
+  folderName: string,
+  invoker: RpcInvoker,
+): Promise<Record<string, FileDto | JavaDto>> {
+  const isResource = folderName === 'res';
+  try {
+    const raw = isResource
+      ? await invoker.call('queryAllFileMap', projectUuid, folderName)
+      : await invoker.call('queryCodeFile', projectUuid, folderName);
+    return normalizeCloudMap((raw ?? {}) as Record<string, unknown>);
+  } catch (e) {
+    if (isNoFolderException(e)) return {};
+    throw e;
+  }
+}
+
 /**
  * 计算变更列表。
  * @param projectUuid 云工程 ID
  * @param srcRoot <workspaceRoot>/src
  * @param invoker RPC 能力
+ * @param snapshot 可选：预取的云端快照 { folder -> cloudMap }；缺省则逐 folder 查询
  */
-export async function refreshChanges(projectUuid: string, srcRoot: string, invoker: RpcInvoker): Promise<Change[]> {
+export async function refreshChanges(
+  projectUuid: string,
+  srcRoot: string,
+  invoker: RpcInvoker,
+  snapshot?: Record<string, Record<string, FileDto | JavaDto>>,
+): Promise<Change[]> {
   const changes: Change[] = [];
   if (!fs.existsSync(srcRoot)) return changes;
 
@@ -40,17 +115,9 @@ export async function refreshChanges(projectUuid: string, srcRoot: string, invok
     const isResource = folderName === 'res';
     const folderDir = path.join(srcRoot, folderName);
 
-    // 1) 云端快照
-    let cloudMap: Record<string, FileDto | JavaDto> = {};
-    try {
-      const raw = isResource
-        ? await invoker.call('queryAllFileMap', projectUuid, folderName)
-        : await invoker.call('queryCodeFile', projectUuid, folderName);
-      cloudMap = normalizeKeys((raw ?? {}) as Record<string, unknown>);
-    } catch (e) {
-      if (isNoFolderException(e)) cloudMap = {};
-      else throw e;
-    }
+    // 1) 云端快照（优先用预取的 snapshot，省 RPC）
+    const cloudMap: Record<string, FileDto | JavaDto> =
+      snapshot?.[folderName] ?? (await fetchCloudMap(projectUuid, folderName, invoker));
 
     // 2) 本地扫描 + 判定
     const local = scanFolder(folderDir, folderName);
@@ -62,23 +129,20 @@ export async function refreshChanges(projectUuid: string, srcRoot: string, invok
 
       if (!cloudDto) {
         // 云无本地有 -> ADDED
-        const localMd5 = lf.isResource
-          ? md5Bytes(fs.readFileSync(lf.absolutePath))
-          : md5String(fs.readFileSync(lf.absolutePath, 'utf8'));
+        const localMd5 = lf.isResource ? cachedBytesMd5(lf.absolutePath) : cachedTextMd5(lf.absolutePath);
         changes.push({ ...lf, folder: folderName, status: 'ADDED', md5: localMd5 });
         continue;
       }
 
       if (lf.isResource) {
-        const bytes = fs.readFileSync(lf.absolutePath);
-        const localMd5 = md5Bytes(bytes);
-        const status = computeResourceStatus({ localMd5, bytesLength: bytes.length, cloudMd5: cloudDto.md5 });
+        const localMd5 = cachedBytesMd5(lf.absolutePath);
+        const status = computeResourceStatus({ localMd5, bytesLength: sizeOf(lf.absolutePath), cloudMd5: cloudDto.md5 });
         changes.push({ ...lf, folder: folderName, status, md5: localMd5 });
         continue;
       }
 
       // Java 文件
-      const content = fs.readFileSync(lf.absolutePath, 'utf8');
+      const content = cachedText(lf.absolutePath);
       const remoteCode = await remoteJavaCode(projectUuid, cloudDto as JavaDto, lf.fullClass!, invoker);
       const status = computeJavaStatus({ local: content, cloudMd5: cloudDto.md5, remoteCode });
       changes.push({ ...lf, folder: folderName, status, md5: md5String(content) });

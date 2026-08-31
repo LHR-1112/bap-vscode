@@ -8,7 +8,8 @@ import { scmDecoFor, statusIconFile } from './types';
 
 export interface BapScmProviderHandle {
   sourceControl: vscode.SourceControl;
-  refresh(): Promise<Change[]>;
+  /** force=true 强制重拉云端快照（手动刷新）；false=自动刷新（TTL 内复用云端快照）。 */
+  refresh(force?: boolean): Promise<Change[]>;
   getChanges(): Change[];
   getChangeByPath(fsPath: string): Change | undefined;
   getDecorations(): BapFileDecorationMap;
@@ -29,6 +30,8 @@ export interface BapScmProviderOptions {
   autoRefresh?: boolean;
   /** 刷新节流（毫秒）。默认 500。 */
   debounceMs?: number;
+  /** 两次刷新之间的最小间隔（毫秒）。默认 1000。 */
+  minRefreshIntervalMs?: number;
   /** 状态 SVG 图标目录（M/A/D 的 status-*.svg 所在，如 plugin/resources/scm-icons）。 */
   iconDir?: string;
 }
@@ -73,9 +76,22 @@ export function createBapScmProvider(
 
   let lastChanges: Change[] = [];
 
-  async function refresh(): Promise<Change[]> {
+  // 刷新串行化：一次只跑一个；期间新触发的刷新合并到「排队」，当前完成后再刷。
+  // 避免刷新耗时超过 debounce 间隔时并发堆积（多次 refresh 同时跑，耗性能）。
+  let refreshing = false;
+  let refreshQueued = false;
+  let lastRefreshEnd = 0;
+  const MIN_REFRESH_INTERVAL_MS = opts.minRefreshIntervalMs ?? 1000;
+
+  async function refresh(force = false): Promise<Change[]> {
+    // 正在刷新：不并发，标记排队，返回当前（上次）结果
+    if (refreshing) {
+      refreshQueued = true;
+      return changes;
+    }
+    refreshing = true;
     try {
-      changes = await sdk.refresh();
+      changes = await sdk.refresh(force);
       applyToGroups(changes);
     } catch (e) {
       // 不静默：把真实原因（.develop 缺失 / 连接失败 / folder 不匹配）展示给用户。
@@ -83,6 +99,18 @@ export function createBapScmProvider(
       const msg = e instanceof Error ? e.message : String(e);
       void vscode.window.setStatusBarMessage(`BAP: 刷新失败 - ${msg}`, 6000);
       return changes;
+    } finally {
+      refreshing = false;
+      lastRefreshEnd = Date.now();
+      // 期间有变更请求：距上次刷新结束足够久则立即再刷，否则再 debounce（限间隔）
+      if (refreshQueued) {
+        refreshQueued = false;
+        if (Date.now() - lastRefreshEnd >= MIN_REFRESH_INTERVAL_MS) {
+          void refresh();
+        } else {
+          scheduleRefresh();
+        }
+      }
     }
     return changes;
   }
@@ -140,13 +168,13 @@ export function createBapScmProvider(
   /** 提交单个文件到云端。 */
   async function commitFile(change: Change, comment = ''): Promise<void> {
     await sdk.code.saveChanges([change], comment);
-    await refresh();
+    await refresh(true);
   }
 
   /** 更新单个文件：从云端拉取最新版覆盖本地（新增文件删除本地）。 */
   async function updateFile(change: Change): Promise<void> {
     await sdk.discardAll([change]);
-    await refresh();
+    await refresh(true);
   }
 
   /** 批量提交一组文件到云端。 */
@@ -156,19 +184,19 @@ export function createBapScmProvider(
       return;
     }
     await sdk.code.saveChanges(changes, comment);
-    await refresh();
+    await refresh(true);
   }
 
   /** 批量更新一组文件：从云端拉取最新版覆盖本地（新增文件删除本地）。 */
   async function updateChanges(changes: Change[]): Promise<void> {
     await sdk.discardAll(changes);
-    await refresh();
+    await refresh(true);
   }
 
   /** 一键更新所有变更：从云端取最新版覆盖本地/新增删除，再刷新。 */
   async function updateAll(): Promise<void> {
     await sdk.discardAll(lastChanges);
-    await refresh();
+    await refresh(true);
   }
 
   // ---- 生命周期 ----
@@ -210,7 +238,7 @@ export function createBapScmProvider(
       return;
     }
     await sdk.code.saveChanges(toCommit, comment);
-    await refresh();
+    await refresh(true);
   }
 
   return {

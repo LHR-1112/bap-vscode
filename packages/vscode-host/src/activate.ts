@@ -58,8 +58,8 @@ export function activateScm(
     fileDecoDisposable,
   );
 
-  // 初始刷新
-  void bapScm.refresh()
+  // 初始刷新（手动：强制拉云端快照）
+  void bapScm.refresh(true)
     .then((changes) => {
       fileDeco.setStatuses(new Map(changes.filter((c) => c.status !== 'NORMAL').map((c) => [c.absolutePath, c.status])));
       log.debug(`初始 refresh 完成，非 NORMAL=${changes.filter((c) => c.status !== 'NORMAL').length}`);
@@ -97,7 +97,7 @@ export function activateScm(
       safe('bapIde.scm.refresh', async () => {
         log.debug('触发 refresh');
         void vscode.window.showInformationMessage('BAP: refresh 已触发');
-        const changes = await bapScm.refresh();
+        const changes = await bapScm.refresh(true);
         fileDeco.setStatuses(new Map(changes.filter((c) => c.status !== 'NORMAL').map((c) => [c.absolutePath, c.status])));
         const dirty = changes.filter((c) => c.status !== 'NORMAL').length;
         log.debug(`[refresh] 完成，变更=${dirty}`);

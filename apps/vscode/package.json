@@ -125,6 +125,11 @@
           "type": "string",
           "default": "",
           "description": "JDK 1.8 安装路径。下载工程后会写入 .vscode/settings.json（java.configuration.runtimes）。留空则自动检测。"
+        },
+        "bapIde.refreshTtlMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "自动刷新复用云端快照的间隔（毫秒）。此间隔内的自动刷新不重新查询云端，只做本地比对；手动刷新始终强制拉取云端。默认 30000。"
         }
       }
     },

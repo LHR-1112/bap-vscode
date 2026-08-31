@@ -2,7 +2,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadDevelop, writeDevelop } from './develop';
-import { refreshChanges } from './refresh';
+import { refreshChanges, listSrcFolders, normalizeCloudMap, isNoFolderException } from './refresh';
 import { buildCommitPackage, commitCode } from './commit';
 import { addRelocateHistory, type RelocateProfile } from './relocate';
 import { syncLibs, type SyncProgress, type SyncResult } from './libs';
@@ -15,6 +15,8 @@ import type {
   CommitResult,
   CResFileDto,
   DevelopConfig,
+  FileDto,
+  JavaDto,
   RpcInvoker,
   VersionNode,
 } from './types';
@@ -27,11 +29,14 @@ export interface BapSdkOptions {
   workspaceRoot: string;
   /** 业务日志回调（宿主接到「BAP IDE」输出通道）。 */
   onLog?: (msg: string) => void;
+  /** 云端快照 TTL（毫秒）：自动刷新在 TTL 内复用云端快照比对、不重查云端。默认 10000。 */
+  cloudSnapshotTtlMs?: number;
 }
 
 export interface BapSdk {
   login(): Promise<{ develop: DevelopConfig; session: SDto; project: CJavaProjectDto }>;
-  refresh(): Promise<Change[]>;
+  /** 刷新变更列表。force=true 强制重拉云端快照（手动刷新）；否则 TTL 内复用缓存快照。 */
+  refresh(force?: boolean): Promise<Change[]>;
   project: {
     list(): Promise<CJavaProjectDto[]>;
     get(): Promise<CJavaProjectDto>;
@@ -74,6 +79,31 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
   let session: SDto | null = null;
   const log = (msg: string): void => options.onLog?.(msg);
 
+  // 云端快照缓存（自动刷新在 TTL 内复用，省 queryCodeFile/queryAllFileMap RPC）
+  const SNAP_TTL_MS = options.cloudSnapshotTtlMs ?? 30000;
+  let cloudSnapshot: { t: number; data: Record<string, Record<string, FileDto | JavaDto>> } | null = null;
+
+  async function fetchCloudSnapshot(projectUuid: string, force: boolean): Promise<Record<string, Record<string, FileDto | JavaDto>>> {
+    if (!force && cloudSnapshot && Date.now() - cloudSnapshot.t < SNAP_TTL_MS) {
+      return cloudSnapshot.data;
+    }
+    const data: Record<string, Record<string, FileDto | JavaDto>> = {};
+    for (const folderName of listSrcFolders(srcRoot)) {
+      const isResource = folderName === 'res';
+      try {
+        const raw = isResource
+          ? await rpc.call('queryAllFileMap', projectUuid, folderName)
+          : await rpc.call('queryCodeFile', projectUuid, folderName);
+        data[folderName] = normalizeCloudMap((raw ?? {}) as Record<string, unknown>);
+      } catch (e) {
+        if (isNoFolderException(e)) data[folderName] = {};
+        else throw e;
+      }
+    }
+    cloudSnapshot = { t: Date.now(), data };
+    return data;
+  }
+
   async function ensureConnected(): Promise<{ develop: DevelopConfig; session: SDto; projectUuid: string }> {
     if (!develop) develop = loadDevelop(workspaceRoot);
     if (!session) {
@@ -95,10 +125,11 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       return { develop: d, session: s, project };
     },
 
-    async refresh() {
-      log('[refresh] 开始');
+    async refresh(force = false) {
+      log(force ? '[refresh] 手动刷新' : '[refresh] 自动刷新');
       const projectUuid = await ensureProjectUuid();
-      const changes = await refreshChanges(projectUuid, srcRoot, rpc);
+      const snapshot = await fetchCloudSnapshot(projectUuid, force);
+      const changes = await refreshChanges(projectUuid, srcRoot, rpc, snapshot);
       log(`[refresh] 完成，变更=${changes.filter((c) => c.status !== 'NORMAL').length}`);
       return changes;
     },

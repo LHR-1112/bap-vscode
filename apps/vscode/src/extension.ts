@@ -124,7 +124,12 @@ export function activate(context: vscode.ExtensionContext): void {
     log.appendLine(`[activate] launch bridge, classpath=${launch.classpath[0]}`);
 
     const rpc = createRpcClient({ launch });
-    const sdk = createBapSdk({ rpc, workspaceRoot: root, onLog: (m) => log.appendLine(`[sdk] ${m}`) });
+    const sdk = createBapSdk({
+      rpc,
+      workspaceRoot: root,
+      onLog: (m) => log.appendLine(`[sdk] ${m}`),
+      cloudSnapshotTtlMs: vscode.workspace.getConfiguration('bapIde').get<number>('refreshTtlMs') ?? 30000,
+    });
 
     // 注册 SCM（createSourceControl + 资源组 + 云端 diff + 文件角标 + 命令）
     log.appendLine('[activate] 开始注册 SCM provider 与命令...');
