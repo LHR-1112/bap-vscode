@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.1] - 2026-08-31
+
+### 新增
+
+- **检查更新（感知更新）**
+  - 启动后台检查 + 命令面板「检查更新」，从 GitHub Release 检测新版本并提示下载。
+  - 适用于**手动 `.vsix` 安装**（VS Code 不会对手动安装的扩展自动更新）。
+  - 配 `bapIde.updateFeedUrl` / `bapIde.checkUpdateOnStartup` 设置项。
+
 ## [1.0.0] - 2026-08-31
 
 BAP IDE（VS Code）首个发布版。面向 **BAP 云工程**：复用官方 Java 桥连 BAP Server，把云端工程当作基线做源码管理、调试、编译与测试。
