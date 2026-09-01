@@ -52,10 +52,21 @@ function sizeOf(abs: string): number {
   return statOf(abs).s;
 }
 
-export function normalizeCloudMap(raw: Record<string, unknown>): Record<string, FileDto> {
+export function normalizeCloudMap(raw: Record<string, unknown> | unknown[]): Record<string, FileDto> {
   const out: Record<string, FileDto> = {};
-  for (const [k, v] of Object.entries(raw ?? {})) {
-    out[k.split(path.sep).join('/').replace(/\\/g, '/')] = (v ?? {}) as FileDto;
+  const push = (k: unknown, v: unknown): void => {
+    // 优先用元素自身的 path 作为云端相对路径（queryCodeFile/queryAllFileMap 经 Gson 可能回传数组，
+    // 对象 key 是索引，要用 value.path 对齐本地 relativePath）
+    const pathKey =
+      v && typeof v === 'object' && typeof (v as { path?: unknown }).path === 'string'
+        ? String((v as { path: string }).path)
+        : String(k);
+    out[pathKey.split(path.sep).join('/').replace(/\\/g, '/')] = (v ?? {}) as FileDto;
+  };
+  if (Array.isArray(raw)) {
+    for (const el of raw) if (el && typeof el === 'object') push('', el);
+  } else {
+    for (const [k, v] of Object.entries(raw ?? {})) push(k, v);
   }
   return out;
 }
