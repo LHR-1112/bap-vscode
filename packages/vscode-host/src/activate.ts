@@ -83,6 +83,20 @@ export function activateScm(
     }
   };
 
+  /** 右下角进度框：SCM 每个干活的动作都用它呈现执行进度（与下载工程一致）。 */
+  const runWithProgress = async <T = void>(
+    title: string,
+    message: string,
+    fn: (prog: vscode.Progress<{ message?: string; increment?: number }>) => Promise<T>,
+  ): Promise<T> =>
+    vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title },
+      async (prog) => {
+        prog.report({ message });
+        return fn(prog);
+      },
+    );
+
   /** SCM context 菜单（右键/内联单个 resource）传给命令的是 resourceUri 或 resource state，而非 Change。
    *  这里统一解析回 provider 里的 Change（按 fsPath 精确匹配）。 */
   function resolveChange(arg: unknown): Change | undefined {
@@ -104,9 +118,11 @@ export function activateScm(
     vscode.commands.registerCommand('bapIde.scm.refresh', async () =>
       safe('bapIde.scm.refresh', async () => {
         log.debug('触发 refresh');
-        void vscode.window.showInformationMessage('BAP: refresh 已触发');
-        const changes = await bapScm.refresh(true);
-        fileDeco.setStatuses(new Map(changes.filter((c) => c.status !== 'NORMAL').map((c) => [c.absolutePath, c.status])));
+        const changes = await runWithProgress('刷新', '刷新中…', async () => {
+          const r = await bapScm.refresh(true);
+          fileDeco.setStatuses(new Map(r.filter((c) => c.status !== 'NORMAL').map((c) => [c.absolutePath, c.status])));
+          return r;
+        });
         const dirty = changes.filter((c) => c.status !== 'NORMAL').length;
         log.debug(`[refresh] 完成，变更=${dirty}`);
         void vscode.window.setStatusBarMessage(`BAP: ${dirty} 个变更`, 3000);
@@ -115,10 +131,11 @@ export function activateScm(
     vscode.commands.registerCommand('bapIde.scm.commit', async () =>
       safe('bapIde.scm.commit', async () => {
         log.debug('触发 commit');
-        void vscode.window.showInformationMessage('BAP: commit 已触发');
         const comment = bapScm.sourceControl.inputBox.value || '';
-        await bapScm.commit(comment);
-        bapScm.sourceControl.inputBox.value = '';
+        await runWithProgress('提交', '提交中…', async () => {
+          await bapScm.commit(comment);
+          bapScm.sourceControl.inputBox.value = '';
+        });
         log.debug('[commit] 完成');
         void vscode.window.setStatusBarMessage('BAP: 提交完成', 3000);
       }),
@@ -132,7 +149,7 @@ export function activateScm(
           '发布',
         );
         if (msg !== '发布') return;
-        await sdk.publish.full();
+        await runWithProgress('发布插件（全量）', '发布中…', () => sdk.publish.full());
         log.debug('[publish] 完成');
         void vscode.window.setStatusBarMessage('BAP: 已发布插件（全量）', 3000);
       }),
@@ -164,8 +181,10 @@ export function activateScm(
         log.debug(`commitFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
         const comment = bapScm.sourceControl.inputBox.value || '';
-        await bapScm.commitFile(change, comment);
-        bapScm.sourceControl.inputBox.value = '';
+        await runWithProgress('提交文件', '提交中…', async () => {
+          await bapScm.commitFile(change, comment);
+          bapScm.sourceControl.inputBox.value = '';
+        });
         log.debug(`[commitFile] 完成，${change.relativePath}`);
         void vscode.window.setStatusBarMessage('BAP: 已提交该文件', 3000);
       }),
@@ -175,7 +194,7 @@ export function activateScm(
         const change = resolveChange(arg);
         log.debug(`updateFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
-        await bapScm.updateFile(change);
+        await runWithProgress('更新文件', '更新中…', () => bapScm.updateFile(change));
         log.debug(`[updateFile] 完成，${change.relativePath}`);
         void vscode.window.setStatusBarMessage('BAP: 已从云端更新该文件', 3000);
       }),
@@ -215,7 +234,7 @@ export function activateScm(
           '更新',
         );
         if (msg !== '更新') return;
-        await bapScm.updateChanges(list);
+        await runWithProgress('更新组', '更新中…', () => bapScm.updateChanges(list));
         log.debug(`[updateGroup] 完成，${group.id} × ${list.length}`);
         void vscode.window.setStatusBarMessage('BAP: 已更新该组', 3000);
       }),
@@ -235,7 +254,7 @@ export function activateScm(
           return;
         }
         const comment = bapScm.sourceControl.inputBox.value || '';
-        await bapScm.commitChanges(list, comment);
+        await runWithProgress('提交组', '提交中…', () => bapScm.commitChanges(list, comment));
         bapScm.sourceControl.inputBox.value = '';
         log.debug(`[commitGroup] 完成，${group.id} × ${list.length}`);
         void vscode.window.setStatusBarMessage('BAP: 已提交该组', 3000);
@@ -250,9 +269,9 @@ export function activateScm(
           '更新',
         );
         if (msg !== '更新') return;
-        await bapScm.updateAll();
+        await runWithProgress('更新全部文件', '更新中…', () => bapScm.updateAll());
         log.debug('[updateAll] 完成');
-        void vscode.window.showInformationMessage('BAP: 已更新所有文件');
+        void vscode.window.setStatusBarMessage('BAP: 已更新所有文件', 3000);
       }),
     ),
     vscode.commands.registerCommand('bapIde.scm.redirect', async () =>
@@ -349,7 +368,7 @@ export function activateScm(
           return;
         }
         const content = fs.readFileSync(absPath, 'utf8');
-        const problems = await sdk.compile.singleCode(fullClass, content, false);
+        const problems = await runWithProgress('编译单类', '编译中…', () => sdk.compile.singleCode(fullClass, content, false));
         const diags = problems.map((p) =>
           new vscode.Diagnostic(
             problemRange(content, p.line, p.startPosition, p.endPosition),
@@ -386,7 +405,9 @@ export function activateScm(
         const code = fs.readFileSync(absPath, 'utf8');
         debugChannel.show(true);
         debugChannel.appendLine(`[debug] 运行 ${fullClass}（云端）…`);
-        const r = await sdk.debug.start(fullClass, code, (line) => debugChannel.appendLine(line));
+        const r = await runWithProgress('调试（云端运行）', '运行中…', () =>
+          sdk.debug.start(fullClass, code, (line) => debugChannel.appendLine(line)),
+        );
         debugChannel.appendLine('--------------------');
         debugChannel.appendLine(`调试ID (DebugKey): ${r.debugKey}`);
         debugChannel.appendLine(`是否异常 (IsException): ${r.isError}`);
