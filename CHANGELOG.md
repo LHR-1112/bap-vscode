@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.2] - 2026-09-01
+
+### 修复
+
+- **修复刷新误报海量变更**（云快照 Map 被序列化成字符串）
+  - 根因：Java 桥 `safeSerialize` 把 `queryCodeFile` / `queryAllFileMap` 返回的
+    `Map`（包名 `java.util`）误判为 JDK 内部类，整张 map 被 `toString` 成 `{path=...}`
+    字符串；TS 侧按字符拆索引，本地路径全对不上 → 文件全被判为新增（曾出现上万变更）。
+  - 桥改为：对异常之外的对象先正常 Gson 序列化，仅序列化失败（JDK 非 opened 模块类）才
+    `toString` 兜底。
+
+### 优化
+
+- **云端快照归一化加固**：`queryCodeFile` / `queryAllFileMap` 无论返回对象还是数组，统一用元素自身 `path` 作为云端相对路径对齐本地，避免 key 为索引时错位。
+- 移除刷新时的临时诊断日志（`[refresh] 云端快照 ...`）。
+
 ## [1.0.1] - 2026-08-31
 
 ### 新增
