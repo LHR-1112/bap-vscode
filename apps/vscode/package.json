@@ -2,7 +2,7 @@
   "name": "bap-ide-vscode",
   "displayName": "BAP IDE",
   "description": "面向 BAP 云工程的 VS Code 插件",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "bap",
   "license": "MIT",
   "repository": {
