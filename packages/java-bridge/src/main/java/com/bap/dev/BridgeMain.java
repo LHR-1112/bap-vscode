@@ -123,7 +123,7 @@ public class BridgeMain {
                 String method = str(req.params, 0);
                 Object[] args = req.params.length > 1 ? asArray(req.params[1]) : new Object[0];
                 Object result = invokeAtomic(client, method, args);
-                writeOk(req.id, GSON.toJson(result));
+                writeOk(req.id, safeSerialize(result));
                 break;
             }
             case "download": {
@@ -326,6 +326,31 @@ public class BridgeMain {
     private static void writeOk(long id, String resultJson) {
         synchronized (OUT_LOCK) {
             OUT.println("{\"id\":" + id + ",\"ok\":true,\"result\":" + resultJson + "}");
+        }
+    }
+
+    /**
+     * 安全序列化 RPC 返回值：Gson 对 JDK 内部模块类（java、javax、sun、jdk、com.sun 等包）的字段反射
+     * 会被 JDK 9+ 模块强封装拦截（InaccessibleObjectException），如 startDebugJava 的 getResult 返回
+     * InvocationTargetException 时会吞掉本应正常返回的业务异常。这里对异常与 JDK 内部包类做 toString
+     * 兜底（toString 即类名/消息，与 IDEA 侧展示一致），其余对象序列化失败也同样兜底。
+     */
+    private static String safeSerialize(Object obj) {
+        if (obj == null) return "null";
+        Class<?> c = obj.getClass();
+        Package pkg = c.getPackage();
+        String pn = pkg == null ? "" : pkg.getName();
+        boolean jdkInternal =
+                obj instanceof Throwable
+                || pn.startsWith("java.") || pn.startsWith("javax.")
+                || pn.startsWith("sun.") || pn.startsWith("jdk.") || pn.startsWith("com.sun.");
+        if (jdkInternal) {
+            return GSON.toJson(String.valueOf(obj));
+        }
+        try {
+            return GSON.toJson(obj);
+        } catch (RuntimeException e) {
+            return GSON.toJson(String.valueOf(obj));
         }
     }
 
