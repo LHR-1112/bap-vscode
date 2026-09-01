@@ -156,6 +156,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     log.appendLine(`[activate] workspaceRoot = ${root}`);
 
+    // 仅当根目录含 .develop 才启用 SCM 存储库（否则视为非 BAP 工程，不显示 Source Control）
+    if (!fs.existsSync(path.join(root, '.develop'))) {
+      log.appendLine('[activate] 根目录无 .develop，跳过 SCM 存储库');
+      return;
+    }
+
     // Java 桥子进程：用扩展内捆绑的 bridge jar 资产
     log.appendLine(`[activate] launch bridge, classpath=${launch.classpath[0]}`);
 
