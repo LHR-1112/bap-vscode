@@ -25,7 +25,7 @@ import type {
   RpcInvoker,
   VersionNode,
 } from './types';
-import type { SessionDto as SDto } from '@bap/rpc';
+import type { JsonValue, SessionDto as SDto } from '@bap/rpc';
 
 export interface BapSdkOptions {
   /** RPC 能力（由宿主注入；apps/vscode 传 createRpcClient() 即可，结构兼容）。 */
@@ -92,6 +92,16 @@ export interface BapSdk {
     project(opts?: TestOptions): Promise<TestResult>;
   };
   disconnect(): Promise<void>;
+}
+
+/** 发布 / 全量导出是长耗时操作，放宽 TS 侧超时（与 lib 同步 / 下载一致）。
+ * 默认 call 只有 30s，发布中途会被掐断成 TIMEOUT，真实成功/报错被吞掉。 */
+const PUBLISH_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** 长耗时原子调用：优先 callWithTimeout，缺省回退 call。 */
+async function rpcLong(rpc: RpcInvoker, method: string, ...args: JsonValue[]): Promise<unknown> {
+  if (rpc.callWithTimeout) return rpc.callWithTimeout(PUBLISH_TIMEOUT_MS, method, ...args);
+  return rpc.call(method, ...args);
 }
 
 export function createBapSdk(options: BapSdkOptions): BapSdk {
@@ -291,14 +301,14 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       async gray(opts) {
         log('[publish.gray] 开始');
         const projectUuid = await ensureProjectUuid();
-        await rpc.call('grayPublish', projectUuid, opts?.requireCompile ?? true);
+        await rpcLong(rpc, 'grayPublish', projectUuid, opts?.requireCompile ?? true);
         log('[publish.gray] 完成');
       },
       async full(opts) {
         log('[publish.full] 开始');
         const projectUuid = await ensureProjectUuid();
-        await rpc.call('rebuildAll', projectUuid);
-        await rpc.call('exportProject2Plugin', projectUuid, null, true, opts?.ignoreErrors ?? false);
+        await rpcLong(rpc, 'rebuildAll', projectUuid);
+        await rpcLong(rpc, 'exportProject2Plugin', projectUuid, null, true, opts?.ignoreErrors ?? false);
         log('[publish.full] 完成');
       },
     },

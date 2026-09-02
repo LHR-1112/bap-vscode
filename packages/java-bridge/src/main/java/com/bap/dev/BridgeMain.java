@@ -213,8 +213,9 @@ public class BridgeMain {
 
         // export* 方法返回大 zip（lib 同步：exportPlatformJars/exportProjectJars/exportPluginJars/
         // exportModelFile/exportOpenSource；发布：exportProject2Plugin），服务端比对/打包耗时可能远超默认
-        // 超时（120s）。临时超时只对下一次调用生效，故在此紧邻调用前放宽。
-        if (methodName.startsWith("export")) {
+        // 超时（120s）；发布前的 rebuildAll 全量编译同样可能超时。临时超时只对下一次调用生效，
+        // 故在此紧邻调用前放宽。
+        if (methodName.startsWith("export") || methodName.equals("rebuildAll") || methodName.equals("grayPublish")) {
             CRpcAdapter.setTempTimeout(30L * 24 * 60 * 60 * 1000);
         }
 
