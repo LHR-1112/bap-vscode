@@ -8,6 +8,7 @@ const production = process.argv.includes('--production');
 
 const extEntry = 'src/extension.ts';
 const viewEntry = path.join('..', '..', 'packages', 'vscode-host', 'src', 'history', 'webview', 'history-app.ts');
+const mcpEntry = path.join('..', '..', 'packages', 'vscode-host', 'src', 'mcp', 'mcp-server.ts');
 
 async function main() {
   const ctxExt = await esbuild.context({
@@ -33,15 +34,31 @@ async function main() {
     minify: production,
   });
 
+  // MCP server：宿主外独立进程，bundled 成 CJS，运行时用 node <dist/mcp-server.js> 拉起。
+  const ctxMcp = await esbuild.context({
+    entryPoints: [mcpEntry],
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    target: 'node18',
+    outfile: 'dist/mcp-server.js',
+    external: ['bufferutil', 'utf-8-validate'],
+    sourcemap: !production,
+    minify: production,
+  });
+
   if (watch) {
     await ctxExt.watch();
     await ctxView.watch();
+    await ctxMcp.watch();
     console.log('[esbuild] watching...');
   } else {
     await ctxExt.rebuild();
     await ctxView.rebuild();
+    await ctxMcp.rebuild();
     await ctxExt.dispose();
     await ctxView.dispose();
+    await ctxMcp.dispose();
     console.log('[esbuild] build complete');
   }
 }

@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { BAP_IDE_NAME, BAP_IDE_VERSION } from '@bap/core';
 import { createRpcClient, type BridgeLaunchConfig } from '@bap/rpc';
 import { createBapSdk, downloadProject, detectJdk8, writeJavaSettings, type CJavaProjectDto } from '@bap/sdk';
-import { activateScm, checkLatestRelease, isNewer, DEFAULT_FEED } from '@bap/vscode-host';
+import { activateScm, checkLatestRelease, isNewer, DEFAULT_FEED, registerMcpServerProvider, isToolCall } from '@bap/vscode-host';
 
 export function activate(context: vscode.ExtensionContext): void {
   // BAP IDE 输出通道：所有诊断日志写到「输出 → BAP IDE」，便于排查激活/命令/连接问题。
@@ -18,6 +18,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(`${BAP_IDE_NAME} v${BAP_IDE_VERSION}`);
     }),
   );
+
+  // MCP：注册 BAP MCP server 定义（VS Code 可发现；无 .develop 工作区时 resolve 钩子中止启动）
+  void registerMcpServerProvider(context, {
+    debug: (m) => log.appendLine(`[mcp] ${m}`),
+    error: (m) => log.appendLine(`[mcp][ERROR] ${m}`),
+  })
+    .then((d) => context.subscriptions.push(d))
+    .catch((e) => log.appendLine(`[activate][mcp] 注册失败: ${e instanceof Error ? e.message : String(e)}`));
 
   // 检查更新（手动 vsix 安装不支持自动更新，这里做「感知更新」）
   const cfg = vscode.workspace.getConfiguration('bapIde');
@@ -64,7 +72,34 @@ export function activate(context: vscode.ExtensionContext): void {
   // 下载工程：命令行入口（不依赖当前打开的工作区）。流式下载 + 解压 + 写 .develop（Java 桥完成），
   // 再写 .vscode/settings.json（JDK1.8），最后替换窗口打开。
   context.subscriptions.push(
-    vscode.commands.registerCommand('bapIde.downloadProject', async () => {
+    vscode.commands.registerCommand('bapIde.downloadProject', async (arg?: unknown) => {
+      const t = isToolCall(arg) ? arg : undefined;
+      if (t) {
+        // 非交互下载（MCP 工具路径）
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!root) return { error: '请先打开一个文件夹' };
+        try {
+          const rpc = createRpcClient({ launch });
+          try {
+            await downloadProject({
+              rpc,
+              uri: t.uri as string,
+              user: t.user as string,
+              pwd: t.pwd as string,
+              projectUuid: t.projectUuid as string,
+              destDir: root,
+              onLog: (m) => log.appendLine(`[downloadProject] ${m}`),
+            });
+            return `已下载到 ${root}`;
+          } finally {
+            await rpc.close();
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          log.appendLine(`[downloadProject] 失败: ${msg}`);
+          return { error: msg };
+        }
+      }
       try {
         log.appendLine('[downloadProject] 开始');
         const uri = await vscode.window.showInputBox({

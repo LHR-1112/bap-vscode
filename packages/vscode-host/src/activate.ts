@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { BapSdk, CJavaProjectDto, Change, LvProblem, RelocateProfile } from '@bap/sdk';
 import { addRelocateHistory, loadDevelop, loadRelocateHistory, removeRelocateHistory } from '@bap/sdk';
+import { isToolCall, execTool, type McpToolCtx } from './mcp/tool-exec';
 import { createBapScmProvider, type BapScmProviderHandle } from './scm/bap-scm-provider';
 import { registerOriginalProvider } from './scm/original-provider';
 import { groupToStatus } from './scm/types';
@@ -52,6 +53,8 @@ export function activateScm(
   log.debug('createBapScmProvider...');
   const iconDir = path.join(context.extensionPath, 'resources', 'scm-icons');
   const bapScm = createBapScmProvider(sdk, workspaceRoot, { autoRefresh: opts.autoRefresh, iconDir });
+  // MCP 工具执行上下文（tool 分支经 execTool 非交互直调 SDK/bapScm）
+  const mcpCtx: McpToolCtx = { sdk, bapScm, workspaceRoot, log };
   log.debug('registerOriginalProvider...');
   const originalProvider = registerOriginalProvider(sdk);
   const historyContent = registerHistoryContentProvider(sdk);
@@ -74,12 +77,13 @@ export function activateScm(
     })
     .catch((e) => log.error(`初始 refresh 失败: ${e instanceof Error ? e.message : String(e)}`));
 
-  const safe = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
+  const safe = async (name: string, fn: () => Promise<unknown> | unknown): Promise<unknown> => {
     try {
-      await fn();
+      return await fn();
     } catch (e) {
       log.error(`命令 ${name} 执行失败: ${e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e)}`);
       void vscode.window.showErrorMessage(`BAP 命令 ${name} 失败，详见输出面板「BAP IDE」`);
+      return undefined;
     }
   };
 
@@ -115,8 +119,10 @@ export function activateScm(
 
   // --- 命令 ---
   subscriptions.push(
-    vscode.commands.registerCommand('bapIde.scm.refresh', async () =>
+    vscode.commands.registerCommand('bapIde.scm.refresh', async (arg?: unknown) =>
       safe('bapIde.scm.refresh', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'refresh', t);
         log.debug('触发 refresh');
         const changes = await runWithProgress('刷新', '刷新中…', async () => {
           const r = await bapScm.refresh(true);
@@ -128,8 +134,10 @@ export function activateScm(
         void vscode.window.setStatusBarMessage(`BAP: ${dirty} 个变更`, 3000);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.commit', async () =>
+    vscode.commands.registerCommand('bapIde.scm.commit', async (arg?: unknown) =>
       safe('bapIde.scm.commit', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'commit', t);
         log.debug('触发 commit');
         const comment = bapScm.sourceControl.inputBox.value || '';
         await runWithProgress('提交', '提交中…', async () => {
@@ -140,8 +148,10 @@ export function activateScm(
         void vscode.window.setStatusBarMessage('BAP: 提交完成', 3000);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.publish', async () =>
+    vscode.commands.registerCommand('bapIde.scm.publish', async (arg?: unknown) =>
       safe('bapIde.scm.publish', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'publish', t);
         log.debug('触发 publish');
         const msg = await vscode.window.showWarningMessage(
           '确定发布插件（全量）？将把当前工程发布给所有用户。',
@@ -177,6 +187,8 @@ export function activateScm(
     ),
     vscode.commands.registerCommand('bapIde.scm.commitFile', async (arg?: unknown) =>
       safe('bapIde.scm.commitFile', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'commitFile', t);
         const change = resolveChange(arg);
         log.debug(`commitFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
@@ -191,6 +203,8 @@ export function activateScm(
     ),
     vscode.commands.registerCommand('bapIde.scm.updateFile', async (arg?: unknown) =>
       safe('bapIde.scm.updateFile', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'updateFile', t);
         const change = resolveChange(arg);
         log.debug(`updateFile: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
@@ -260,8 +274,10 @@ export function activateScm(
         void vscode.window.setStatusBarMessage('BAP: 已提交该组', 3000);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.updateAll', async () =>
+    vscode.commands.registerCommand('bapIde.scm.updateAll', async (arg?: unknown) =>
       safe('bapIde.scm.updateAll', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'updateAll', t);
         log.debug('触发 updateAll');
         const msg = await vscode.window.showWarningMessage(
           '确定更新所有文件到云端最新版？将覆盖本地改动，新增文件会被删除。',
@@ -274,15 +290,19 @@ export function activateScm(
         void vscode.window.setStatusBarMessage('BAP: 已更新所有文件', 3000);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.redirect', async () =>
+    vscode.commands.registerCommand('bapIde.scm.redirect', async (arg?: unknown) =>
       safe('bapIde.scm.redirect', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'redirect', t);
         log.debug('触发 redirect');
         await runRedirect(sdk, bapScm, workspaceRoot, log);
         log.debug('[redirect] 完成');
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.projectHistory', async () =>
+    vscode.commands.registerCommand('bapIde.scm.projectHistory', async (arg?: unknown) =>
       safe('bapIde.scm.projectHistory', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'projectHistory', t);
         log.debug('触发 projectHistory');
         await openHistoryView('project', sdk, context, undefined, (m) => log.debug(m));
         log.debug('[projectHistory] 完成');
@@ -290,6 +310,8 @@ export function activateScm(
     ),
     vscode.commands.registerCommand('bapIde.scm.fileHistory', async (arg?: unknown) =>
       safe('bapIde.scm.fileHistory', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'fileHistory', t);
         const change = resolveChange(arg);
         log.debug(`fileHistory: change=${change ? `${change.relativePath}|${change.absolutePath}` : '(未找到)'}`);
         if (!change) return;
@@ -298,8 +320,10 @@ export function activateScm(
         log.debug('[fileHistory] 完成');
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.updateLibs', async () =>
+    vscode.commands.registerCommand('bapIde.scm.updateLibs', async (arg?: unknown) =>
       safe('bapIde.scm.updateLibs', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'updateLibs', t);
         log.debug('触发 updateLibs');
         const msg = await vscode.window.showWarningMessage(
           '确定更新依赖？将按云端 md5 更新本地 lib，并删除云端已不存在的本地 lib 包。',
@@ -326,8 +350,10 @@ export function activateScm(
         void vscode.window.setStatusBarMessage(`BAP: 已更新依赖（${r.updated} 更新，${r.deleted} 删除）`, 5000);
       }),
     ),
-    vscode.commands.registerCommand('bapIde.scm.compileProject', async () =>
+    vscode.commands.registerCommand('bapIde.scm.compileProject', async (arg?: unknown) =>
       safe('bapIde.scm.compileProject', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'compileProject', t);
         log.debug('触发 compileProject');
         const msg = await vscode.window.showWarningMessage(
           '确定编译项目（本地）？将用 JDK javac 编译当前工程 src/** 到 bin/（不连服务器）。',
@@ -353,6 +379,8 @@ export function activateScm(
     ),
     vscode.commands.registerCommand('bapIde.scm.compileFile', async (arg?: unknown) =>
       safe('bapIde.scm.compileFile', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'compileFile', t);
         // SCM 文件项右键传 resource state；编辑器右键菜单传选中的 Uri。统一解析到文件绝对路径。
         const change = resolveChange(arg);
         const absPath = change?.absolutePath ?? extractFsPath(arg);
@@ -390,6 +418,8 @@ export function activateScm(
     ),
     vscode.commands.registerCommand('bapIde.scm.debugClass', async (arg?: unknown) =>
       safe('bapIde.scm.debugClass', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'debugClass', t);
         const change = resolveChange(arg);
         const absPath = change?.absolutePath ?? extractFsPath(arg);
         log.debug(`debugClass: absPath=${absPath ?? '(未找到)'}`);
@@ -421,6 +451,8 @@ export function activateScm(
     ),
     vscode.commands.registerCommand('bapIde.scm.testProject', async (arg?: unknown) =>
       safe('bapIde.scm.testProject', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (t) return execTool(mcpCtx, 'testProject', t);
         const change = resolveChange(arg);
         const absPath = change?.absolutePath ?? extractFsPath(arg);
         let selectClass: string | undefined;
@@ -445,6 +477,28 @@ export function activateScm(
           r.failed ? `BAP: 单元测试 ${r.failed} 失败 / ${r.passed} 通过` : `BAP: 单元测试通过（${r.passed}）`,
           5000,
         );
+      }),
+    ),
+  );
+
+  // 独立能力命令：查看项目列表 / 取云端当前文件（主要作为 MCP 工具，命令面板亦可调）
+  subscriptions.push(
+    vscode.commands.registerCommand('bapIde.listProjects', async (arg?: unknown) =>
+      safe('bapIde.listProjects', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        const list = (await execTool(mcpCtx, 'listProjects', t ?? { __tool: true })) as CJavaProjectDto[];
+        if (t) return list;
+        void vscode.window.setStatusBarMessage(`BAP: 当前环境 ${list.length} 个工程`, 5000);
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.fetchCurrent', async (arg?: unknown) =>
+      safe('bapIde.fetchCurrent', async () => {
+        const t = isToolCall(arg) ? arg : undefined;
+        if (!t) {
+          void vscode.window.showInformationMessage('BAP: fetchCurrent 需提供 fullClass 或 path');
+          return;
+        }
+        return execTool(mcpCtx, 'fetchCurrent', t);
       }),
     ),
   );

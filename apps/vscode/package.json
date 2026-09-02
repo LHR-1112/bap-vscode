@@ -22,6 +22,12 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "bap",
+        "label": "BAP"
+      }
+    ],
     "commands": [
       {
         "command": "bapIde.showVersion",
@@ -145,6 +151,16 @@
       {
         "command": "bapIde.checkUpdate",
         "title": "Check Update",
+        "category": "BAP"
+      },
+      {
+        "command": "bapIde.listProjects",
+        "title": "List Projects",
+        "category": "BAP"
+      },
+      {
+        "command": "bapIde.fetchCurrent",
+        "title": "Fetch Current",
         "category": "BAP"
       }
     ],
@@ -367,6 +383,7 @@
     "esbuild": "^0.24.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "lit": "^3.3.3"
   }
 }
