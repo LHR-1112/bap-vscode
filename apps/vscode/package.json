@@ -162,6 +162,11 @@
         "command": "bapIde.fetchCurrent",
         "title": "Fetch Current",
         "category": "BAP"
+      },
+      {
+        "command": "bapIde.resetAgentInstructions",
+        "title": "Reset Agent Instructions",
+        "category": "BAP"
       }
     ],
     "configuration": {

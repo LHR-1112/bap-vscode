@@ -28,6 +28,8 @@ export type { UpdateInfo } from './update-check';
 export { registerMcpServerProvider, MCP_SERVER_ID } from './mcp/host';
 export type { IpTool } from './mcp/tools';
 export { isToolCall, type ToolArg } from './mcp/tool-exec';
+export { collectAgentProjectInfo, buildAgentFileContent } from './agent/agent-instructions';
+export type { AgentProjectInfo } from './agent/agent-instructions';
 
 // 便捷：给定 sdk 和 workspaceRoot 一次性激活（供 apps/vscode 调用）。
 export async function activateBapScm(

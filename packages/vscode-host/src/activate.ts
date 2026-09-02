@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import type { BapSdk, CJavaProjectDto, Change, LvProblem, RelocateProfile } from '@bap/sdk';
 import { addRelocateHistory, loadDevelop, loadRelocateHistory, removeRelocateHistory } from '@bap/sdk';
 import { isToolCall, execTool, type McpToolCtx } from './mcp/tool-exec';
+import { collectAgentProjectInfo, buildAgentFileContent } from './agent/agent-instructions';
 import { createBapScmProvider, type BapScmProviderHandle } from './scm/bap-scm-provider';
 import { registerOriginalProvider } from './scm/original-provider';
 import { groupToStatus } from './scm/types';
@@ -499,6 +500,22 @@ export function activateScm(
           return;
         }
         return execTool(mcpCtx, 'fetchCurrent', t);
+      }),
+    ),
+    vscode.commands.registerCommand('bapIde.resetAgentInstructions', async () =>
+      safe('bapIde.resetAgentInstructions', async () => {
+        const msg = await vscode.window.showWarningMessage(
+          `重建 ${workspaceRoot}/CLAUDE.md 与 AGENTS.md（覆盖现有内容）？`,
+          { modal: true },
+          '重建',
+        );
+        if (msg !== '重建') return;
+        const info = collectAgentProjectInfo(workspaceRoot);
+        const content = buildAgentFileContent(info);
+        fs.writeFileSync(path.join(workspaceRoot, 'CLAUDE.md'), content);
+        fs.writeFileSync(path.join(workspaceRoot, 'AGENTS.md'), content);
+        log.debug('[resetAgentInstructions] 已写入 CLAUDE.md / AGENTS.md');
+        void vscode.window.setStatusBarMessage('BAP: 已重建 CLAUDE.md / AGENTS.md', 5000);
       }),
     ),
   );
