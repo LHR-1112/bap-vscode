@@ -15,6 +15,14 @@
 - **命令标题改为英文**：`contributes.commands` 标题由中文改为英文（命令 `category` 仍为 `BAP`），
   命令面板 / 菜单显示为 `BAP: Refresh`、`BAP: Commit` 等。
 
+### 新增
+
+- **MCP 集成**：插件注册 MCP server（id=`bap`），把云工程能力暴露为 AI 工具（Claude Code / Codex / Copilot 可直接调用）。
+  - 基于官方 `@modelcontextprotocol/sdk`；`mcp-server` 独立子进程 + 宿主本地 IPC 转发，严格命令映射（一个 MCP tool ↔ 一个 `bapIde.*` 命令）。
+  - 首批 **17 个工具**：刷新 / 提交全部 / 提交单文件 / 更新文件（回退云端）/ 更新全部 / 发布插件 / 项目历史 / 文件历史 / 更新依赖 / 编译项目 / 编译单类 / 启动调试 / 单元测试 / 重定向 / 下载工程 / 项目列表 / 取云端当前文件。
+  - 新增命令 `bapIde.listProjects`（查看项目列表）、`bapIde.fetchCurrent`（取云端当前文件）。
+  - 附带技能 `skill/bap-vscode-mcp/`，说明 AI 如何调用这些 MCP 工具。
+
 ## [1.0.2] - 2026-09-01
 
 ### 修复
