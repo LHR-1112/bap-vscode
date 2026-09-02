@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.3] - 2026-09-02
+
+### 修复
+
+- **修复发布插件（全量 / 灰度）吞掉报错并报超时**
+  - 根因：发布走 RPC 默认 30s 超时，`rebuildAll` / `exportProject2Plugin` / `grayPublish`
+    通常远超该时限；TS 侧 30s 定时器先触发产生 TIMEOUT，晚到的真实成功 / 服务端报错被丢弃。
+  - 修复：SDK 对发布相关调用改用 `callWithTimeout`（30min 长超时）；Java 桥对
+    `rebuildAll` / `grayPublish` 一并放宽服务端 temp timeout（`export*` 已有）。
+
 ## [1.0.2] - 2026-09-01
 
 ### 修复
