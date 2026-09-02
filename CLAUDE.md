@@ -14,10 +14,11 @@ BAP IDE —— 面向 BAP 云工程的 VS Code 插件。通过 WebSocket RPC 连
 
 ```bash
 npm install         # 安装依赖（npm workspaces）
-npm run compile     # 构建插件（esbuild → apps/vscode/dist/extension.js）
+npm run compile     # 构建 JS bundle（esbuild → apps/vscode/dist/extension.js）
 npm run watch       # 监听构建
 npm run typecheck   # TypeScript 类型检查（tsc --noEmit）
-npm run package     # 打包 .vsix（vsce）
+npm run build       # 构建 + 打包 .vsix 到仓库根 dist/
+npm run package     # 同 build（构建 + 打包）
 ```
 
 调试：VS Code 打开仓库根目录，按 F5（配置在 `.vscode/launch.json`），以开发模式加载 `apps/vscode` 插件。

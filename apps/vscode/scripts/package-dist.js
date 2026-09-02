@@ -19,8 +19,10 @@ function run(cmd, opts = {}) {
 console.log(`[package-dist] 根 = ${root}`);
 fs.mkdirSync(distDir, { recursive: true });
 
-// 1) 根构建（编译 Java 桥 + stage 到 assets + esbuild --production）
-run('npm run build', { cwd: root });
+// 1) 构建（编译 Java 桥 + stage 到 assets + esbuild --production）
+// 注意：用 `-w bap-ide-vscode` 直接走应用 workspace 的 build，而不是根 `npm run build`，
+// 避免根 build 指向本脚本（package-dist.js）时无限递归。
+run('npm run build -w bap-ide-vscode', { cwd: root });
 
 // 2) 打包到根 dist/（临时跳过 vscode:prepublish 重复构建，直接复用已产出的 dist/）
 const pkgPath = path.join(appDir, 'package.json');
