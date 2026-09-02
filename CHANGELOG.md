@@ -10,6 +10,11 @@
   - 修复：SDK 对发布相关调用改用 `callWithTimeout`（30min 长超时）；Java 桥对
     `rebuildAll` / `grayPublish` 一并放宽服务端 temp timeout（`export*` 已有）。
 
+### 优化
+
+- **命令标题改为英文**：`contributes.commands` 标题由中文改为英文（命令 `category` 仍为 `BAP`），
+  命令面板 / 菜单显示为 `BAP: Refresh`、`BAP: Commit` 等。
+
 ## [1.0.2] - 2026-09-01
 
 ### 修复
