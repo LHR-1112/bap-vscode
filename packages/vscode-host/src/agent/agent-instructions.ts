@@ -77,6 +77,8 @@ export function buildAgentFileContent(info: AgentProjectInfo): string {
     '- `redirect` 重定向 / `downloadProject` 下载工程',
     '- `listProjects` 项目列表 / `fetchCurrent` 取云端当前文件',
     '',
+    'MCP 已随 `Reset Agent Instructions` 配置到 Claude Code（工程根 `.mcp.json`）与 Codex（工程根 `.codex/config.toml`）；配置后重启对应客户端即可调用上述工具。',
+    '',
     '## 核心约束',
     '',
     '- MUST 使用 Java 8 兼容语法与 API。',

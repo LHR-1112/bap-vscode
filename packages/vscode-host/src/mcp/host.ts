@@ -3,11 +3,34 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { BAP_TOOLS, type IpTool } from './tools';
 
 export const MCP_SERVER_ID = 'bap';
+
+/** IPC 端点文件（供 Claude Code / Codex 拉起的 mcp-server 发现宿主端点）。 */
+export const MCP_IPC_FILE = path.join(os.homedir(), '.bap', 'mcp-ipc');
+
+/** 把端点写入 ~/.bap/mcp-ipc（每次激活覆盖）。 */
+function writeIpcFile(endpoint: string): void {
+  try {
+    fs.mkdirSync(path.dirname(MCP_IPC_FILE), { recursive: true });
+    fs.writeFileSync(MCP_IPC_FILE, endpoint, 'utf8');
+  } catch {
+    /* 写失败不影响 provider 注册 */
+  }
+}
+
+/** 删除端点文件（宿主退出后端点已失效）。 */
+function deleteIpcFile(): void {
+  try {
+    fs.rmSync(MCP_IPC_FILE, { force: true });
+  } catch {
+    /* ignore */
+  }
+}
 
 interface HostIpc {
   server: net.Server;
@@ -49,6 +72,7 @@ export function registerMcpServerProvider(
     ipc.server.listen(0, '127.0.0.1', () => {
       const addr = ipc.server.address() as net.AddressInfo;
       const endpoint = `127.0.0.1:${addr.port}:${token}`;
+      writeIpcFile(endpoint);
 
       const serverDef: vscode.McpStdioServerDefinition = new vscode.McpStdioServerDefinition(
         'BAP',
@@ -77,6 +101,7 @@ export function registerMcpServerProvider(
           disp.dispose();
           for (const s of ipc.sockets) { try { s.destroy(); } catch { /* ignore */ } }
           try { ipc.server.close(); } catch { /* ignore */ }
+          deleteIpcFile();
         },
       });
     });

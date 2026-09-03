@@ -5,8 +5,24 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as net from 'node:net';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
-const BAP_IPC = process.env.BAP_IPC ?? '';
+/** 端点解析：BAP_IPC 环境变量 → BAP_IPC_FILE → ~/.bap/mcp-ipc。 */
+function resolveEndpoint(): string {
+  if (process.env.BAP_IPC) return process.env.BAP_IPC;
+  const file = process.env.BAP_IPC_FILE ?? path.join(os.homedir(), '.bap', 'mcp-ipc');
+  try {
+    const content = fs.readFileSync(file, 'utf8').trim();
+    if (content) return content;
+  } catch {
+    /* ignore */
+  }
+  return '';
+}
+
+const BAP_IPC = resolveEndpoint();
 const [IPC_HOST, IPC_PORT, IPC_TOKEN] = BAP_IPC.split(':');
 
 interface ToolDef {
@@ -47,7 +63,7 @@ function rpc(sock: net.Socket, msg: Record<string, unknown>, timeoutMs = 30_000)
 
 async function main(): Promise<void> {
   if (!BAP_IPC || !IPC_PORT) {
-    console.error('[bap-mcp] BAP_IPC 未提供，退出');
+    console.error('[bap-mcp] 找不到宿主 IPC 端点（BAP_IPC / ~/.bap/mcp-ipc），退出');
     process.exit(1);
   }
   const sock = await connectIpc();

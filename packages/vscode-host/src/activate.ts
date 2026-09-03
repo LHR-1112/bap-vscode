@@ -6,6 +6,7 @@ import type { BapSdk, CJavaProjectDto, Change, LvProblem, RelocateProfile } from
 import { addRelocateHistory, loadDevelop, loadRelocateHistory, removeRelocateHistory } from '@bap/sdk';
 import { isToolCall, execTool, type McpToolCtx } from './mcp/tool-exec';
 import { collectAgentProjectInfo, buildAgentFileContent } from './agent/agent-instructions';
+import { mergeMcpJson, mergeCodexToml } from './agent/mcp-config';
 import { createBapScmProvider, type BapScmProviderHandle } from './scm/bap-scm-provider';
 import { registerOriginalProvider } from './scm/original-provider';
 import { groupToStatus } from './scm/types';
@@ -505,17 +506,29 @@ export function activateScm(
     vscode.commands.registerCommand('bapIde.resetAgentInstructions', async () =>
       safe('bapIde.resetAgentInstructions', async () => {
         const msg = await vscode.window.showWarningMessage(
-          `重建 ${workspaceRoot}/CLAUDE.md 与 AGENTS.md（覆盖现有内容）？`,
+          `重建 ${workspaceRoot}/CLAUDE.md、AGENTS.md，并为 Claude Code（.mcp.json）与 Codex（.codex/config.toml）写入 MCP 配置？`,
           { modal: true },
           '重建',
         );
         if (msg !== '重建') return;
+        // 1) Agent 指令文件
         const info = collectAgentProjectInfo(workspaceRoot);
         const content = buildAgentFileContent(info);
         fs.writeFileSync(path.join(workspaceRoot, 'CLAUDE.md'), content);
         fs.writeFileSync(path.join(workspaceRoot, 'AGENTS.md'), content);
-        log.debug('[resetAgentInstructions] 已写入 CLAUDE.md / AGENTS.md');
-        void vscode.window.setStatusBarMessage('BAP: 已重建 CLAUDE.md / AGENTS.md', 5000);
+        // 2) Claude Code MCP 配置（工程级 .mcp.json）
+        const mcpServerPath = path.join(context.extensionPath, 'dist', 'mcp-server.js');
+        const mcpJsonFile = path.join(workspaceRoot, '.mcp.json');
+        const mcpJson = mergeMcpJson(fs.existsSync(mcpJsonFile) ? fs.readFileSync(mcpJsonFile, 'utf8') : undefined, mcpServerPath);
+        fs.writeFileSync(mcpJsonFile, mcpJson);
+        // 3) Codex MCP 配置（工程级 .codex/config.toml）
+        const codexDir = path.join(workspaceRoot, '.codex');
+        const codexFile = path.join(codexDir, 'config.toml');
+        const codexToml = mergeCodexToml(fs.existsSync(codexFile) ? fs.readFileSync(codexFile, 'utf8') : undefined, mcpServerPath);
+        fs.mkdirSync(codexDir, { recursive: true });
+        fs.writeFileSync(codexFile, codexToml);
+        log.debug('[resetAgentInstructions] 已写入 CLAUDE.md / AGENTS.md / .mcp.json / .codex/config.toml');
+        void vscode.window.setStatusBarMessage('BAP: 已重建 Agent 指令与 MCP 配置（重启 Claude Code / 重载 Codex 生效）', 8000);
       }),
     ),
   );
