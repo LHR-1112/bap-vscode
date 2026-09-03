@@ -23,6 +23,7 @@
   - 新增命令 `bapIde.listProjects`（查看项目列表）、`bapIde.fetchCurrent`（取云端当前文件）。
   - 附带技能 `skill/bap-vscode-mcp/`，说明 AI 如何调用这些 MCP 工具。
   - **Reset Agent Instructions 命令**：`bapIde.resetAgentInstructions` 重建工程根 `CLAUDE.md` / `AGENTS.md`，内容依据插件实际 MCP 工具与 `skill/bap-vscode-mcp` 生成。
+  - **MCP 配置自动写入**：`Reset Agent Instructions` 同时生成 Claude Code（工程根 `.mcp.json`）与 Codex（工程根 `.codex/config.toml`）的 MCP 配置；IPC 端点写入 `~/.bap/mcp-ipc`，配置中不含 token，插件重载后无需改配置。
 
 ## [1.0.2] - 2026-09-01
 
