@@ -152,4 +152,9 @@ export interface VersionNode {
 export interface CommitResult {
   changes: Change[];
   pkg: CommitPackage;
+  /**
+   * 提交后回读验证告警：云端内容与**实际提交的内容**不一致的文件（疑似服务端转码/落库损坏）。
+   * 基准是提交包里上传的字节/文本（非重新读本地文件），资源与 Java 均跳过 >1MB 的条目。
+   */
+  verifyWarnings: string[];
 }

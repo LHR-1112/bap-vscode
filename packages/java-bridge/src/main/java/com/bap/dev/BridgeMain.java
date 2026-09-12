@@ -6,6 +6,10 @@ import com.cdao.CDaoConst;
 import com.cdao.mgr.CSession;
 import com.leavay.common.gson.Gson;
 import com.leavay.common.gson.JsonSyntaxException;
+import com.leavay.common.gson.TypeAdapter;
+import com.leavay.common.gson.stream.JsonReader;
+import com.leavay.common.gson.stream.JsonToken;
+import com.leavay.common.gson.stream.JsonWriter;
 import com.leavay.common.util.GsonUtil;
 import com.leavay.common.util.ProgressCtrl.ProgressControllerFEIntf;
 import com.leavay.common.util.ProgressCtrl.crpc.CProgressProxy;
@@ -15,7 +19,9 @@ import com.leavay.nio.crpc.CRpcAdapter;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -46,14 +52,65 @@ import java.util.logging.Logger;
 public class BridgeMain {
     private static final Logger LOG = Logger.getLogger(BridgeMain.class.getName());
 
+    /**
+     * byte[] 的 JSON 表示：显式使用<b>标准 base64</b>（RFC 4648，含 + / 与 = 填充）。
+     *
+     * <p>为什么必须自定义：Leavay 的 Gson fork 对 byte[] 用的是 URL-safe 变体（- _，且不带填充），
+     * 而 TS 侧 Node 的 {@code Buffer.toString('base64')} 生成的是<b>标准</b> base64 —— 两者字母表
+     * 不同，fork 的解码器遇到 + / 会解错，导致<b>上传的二进制内容被静默破坏</b>。实测 242 KB 的
+     * res 文件有 7.44% 的字节被改写，且「只增位不丢位」（纯 OR），破坏后的 zip 无法解压、
+     * 含中文的文本文件重新拉取后变乱码。
+     *
+     * <p>读取方向原本正常纯属侥幸：Node 的解码器宽松，同时接受两种字母表。此处统一为标准的
+     * + / 与 = 填充（与 TS 侧默认行为一致），读取时则两种变体都兼容。
+     */
+    private static final TypeAdapter<byte[]> BYTE_ARRAY_ADAPTER = new TypeAdapter<byte[]>() {
+        @Override
+        public void write(JsonWriter out, byte[] value) throws IOException {
+            if (value == null) {
+                out.nullValue();
+            } else {
+                out.value(java.util.Base64.getEncoder().encodeToString(value));
+            }
+        }
+
+        @Override
+        public byte[] read(JsonReader in) throws IOException {
+            if (in.peek() == JsonToken.NULL) {
+                in.nextNull();
+                return null;
+            }
+            return decodeBase64(in.nextString());
+        }
+    };
+
     // 序列化：字段反射 + 禁用 HTML 转义，排除 static/transient
     private static final Gson GSON = GsonUtil.newSimpleGsonBuilder()
             .disableHtmlEscaping()
             .excludeFieldsWithModifiers(Modifier.STATIC, Modifier.TRANSIENT)
+            .registerTypeAdapter(byte[].class, BYTE_ARRAY_ADAPTER)
             .create();
 
-    private static final PrintStream OUT = new PrintStream(System.out, true);
+    /** 解码 base64：兼容标准 / URL-safe 两种字母表与缺失填充（MIME 解码器忽略空白、容忍缺 =）。 */
+    private static byte[] decodeBase64(String s) {
+        String t = s.replace('-', '+').replace('_', '/').replaceAll("\\s", "");
+        return java.util.Base64.getMimeDecoder().decode(t);
+    }
+
+
+    // 显式 UTF-8：JVM 平台默认字符集在中文 Windows 上是 GBK，TS 侧 readline 固定按 UTF-8 解码，
+    // 不指定会导致所有含中文的响应帧（getJavaCode 代码、错误消息、进度）在 Windows 上乱码。
+    private static final PrintStream OUT = utf8PrintStream(FileDescriptor.out);
     private static final Object OUT_LOCK = new Object();
+
+    /** Java 8 无 PrintStream(OutputStream, boolean, Charset)，用 (…, boolean, String) + 常量名。 */
+    private static PrintStream utf8PrintStream(FileDescriptor fd) {
+        try {
+            return new PrintStream(new FileOutputStream(fd), true, StandardCharsets.UTF_8.name());
+        } catch (java.io.UnsupportedEncodingException e) {
+            throw new AssertionError("UTF-8 must be supported", e); // UTF-8 恒定可用，不会发生
+        }
+    }
 
     // 请求 JSON 映射
     private static class Req {
@@ -397,7 +454,8 @@ public class BridgeMain {
     private static void redirectSystemOutToStderr() {
         // 第三方（tcmcat/netty）可能直接写 System.out，污染 stdout 的 JSON 协议帧。
         // OUT 已在类加载时捕获原始 stdout，因此这里把 System.out 重定向到 stderr 是安全的。
-        System.setOut(new PrintStream(System.err, true));
+        // 同样显式 UTF-8（stderr 在 TS 侧按 utf8 读，见 transport.ts）。
+        System.setOut(utf8PrintStream(FileDescriptor.err));
     }
 
     private static void quietJdkLogging() {

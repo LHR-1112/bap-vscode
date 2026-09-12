@@ -478,5 +478,107 @@ async function doSave(
     invoker: rpc,
   });
   await commitCode(projectUuid, pkg, rpc);
-  return { changes, pkg };
+  const verifyWarnings = await verifyCommitted(projectUuid, pkg, rpc, dirty);
+  return { changes, pkg, verifyWarnings };
+}
+
+/** 字节差异摘要：首个差异偏移 / 差异字节数 / 差异处是否全为 '?'（字符集转换损坏的特征）。 */
+function diffSummary(sent: Buffer, remote: Buffer): string {
+  const n = Math.min(sent.length, remote.length);
+  let first = -1;
+  let count = 0;
+  let question = 0;
+  for (let i = 0; i < n; i++) {
+    if (sent[i] !== remote[i]) {
+      if (first < 0) first = i;
+      count++;
+      if (remote[i] === 0x3f) question++; // '?'
+    }
+  }
+  const lenDiff = remote.length - sent.length;
+  const parts = [`首个差异偏移=${first}`, `差异字节=${count}`];
+  if (lenDiff !== 0) parts.push(`长度差=${lenDiff}`);
+  if (count > 0 && question === count) parts.push('差异处云端全为 "?"（疑似字符集转换损坏）');
+  return parts.join('，');
+}
+
+/**
+ * 提交后回读验证：把**提交包里实际上传的内容**与云端读回比对。
+ * 基准取提交包而非重新读本地文件——否则 build/编辑器在提交往返期间改写本地文件会误报。
+ * 同时单独检查「本地文件是否在提交往返期间被改写」，与「云端损坏」区分开。
+ */
+async function verifyCommitted(
+  projectUuid: string,
+  pkg: CommitPackage,
+  rpc: RpcInvoker,
+  changes: Change[],
+): Promise<string[]> {
+  const warnings: string[] = [];
+  // 大文件（图片/二进制等）跳过：验证需要整文件回读，不值得
+  const MAX_VERIFY_BYTES = 1024 * 1024;
+  const norm = (s: string): string => s.replace(/\r\n/g, '\n');
+
+  // 提交包索引：相对路径 / 全类名 -> 实际上传的内容
+  const resPath = (pkgName: string, fileName: string): string =>
+    pkgName ? `${pkgName.split('.').join('/')}/${fileName}` : fileName;
+  const sentRes = new Map<string, Buffer>();
+  for (const f of Object.values(pkg.mapFolder2Files).flat()) {
+    sentRes.set(resPath(f.filePackage, f.fileName), Buffer.from(f.fileBin, 'base64'));
+  }
+  const sentJava = new Map<string, string>();
+  for (const c of Object.values(pkg.mapFolder2Codes).flat()) {
+    sentJava.set(c.javaPackage ? `${c.javaPackage}.${c.mainClass}` : c.mainClass, c.code);
+  }
+
+  // 1) 云端内容 vs 提交内容（真正回答「服务端有没有存坏」）
+  for (const [path, bytes] of sentRes) {
+    if (bytes.length > MAX_VERIFY_BYTES) continue;
+    try {
+      const remote = (await rpc.call('getResFile', projectUuid, path, false)) as CResFileDto | null;
+      const remoteBytes = remote?.fileBin ? Buffer.from(remote.fileBin, 'base64') : null;
+      if (!remoteBytes) warnings.push(`资源 ${path}：提交后云端读不到该文件`);
+      else if (!remoteBytes.equals(bytes)) {
+        warnings.push(`资源 ${path}：云端内容与提交内容不一致（${diffSummary(bytes, remoteBytes)}）`);
+      }
+    } catch {
+      // 回读失败不阻塞提交结果
+    }
+  }
+  for (const [fullClass, code] of sentJava) {
+    if (code.length > MAX_VERIFY_BYTES) continue;
+    try {
+      const remote = (await rpc.call('getJavaCode', projectUuid, fullClass)) as CJavaCode | null;
+      if (remote?.code == null) warnings.push(`Java ${fullClass}：提交后云端读不到该类`);
+      else if (norm(remote.code) !== norm(code)) {
+        warnings.push(
+          `Java ${fullClass}：云端内容与提交内容不一致（${diffSummary(Buffer.from(code, 'utf8'), Buffer.from(remote.code, 'utf8'))}）`,
+        );
+      }
+    } catch {
+      // 回读失败不阻塞提交结果
+    }
+  }
+
+  // 2) 本地文件是否在提交往返期间被改写（build 产物/编辑器热保存）——与「云端损坏」是两个问题
+  for (const ch of changes) {
+    if (ch.status === 'DELETED_LOCALLY') continue;
+    try {
+      if (ch.isResource) {
+        const now = fs.readFileSync(ch.absolutePath);
+        const sent = sentRes.get(ch.relativePath.replace(/^\//, ''));
+        if (sent && now.length <= MAX_VERIFY_BYTES && !sent.equals(now)) {
+          warnings.push(`资源 ${ch.relativePath}：本地文件在提交期间被改写（云端存的是提交时的版本）`);
+        }
+      } else {
+        const fullClass = ch.fullClass ?? '';
+        const sent = sentJava.get(fullClass);
+        if (sent && norm(fs.readFileSync(ch.absolutePath, 'utf8')) !== norm(sent)) {
+          warnings.push(`Java ${fullClass}：本地文件在提交期间被改写（云端存的是提交时的版本）`);
+        }
+      }
+    } catch {
+      // 读不到就跳过
+    }
+  }
+  return warnings;
 }

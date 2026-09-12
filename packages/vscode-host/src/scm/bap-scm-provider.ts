@@ -80,6 +80,7 @@ export function createBapScmProvider(
   // 避免刷新耗时超过 debounce 间隔时并发堆积（多次 refresh 同时跑，耗性能）。
   let refreshing = false;
   let refreshQueued = false;
+  let refreshQueuedForce = false; // 排队请求合并后的 force：任一排队刷新要求强制都要保留
   let lastRefreshEnd = 0;
   const MIN_REFRESH_INTERVAL_MS = opts.minRefreshIntervalMs ?? 1000;
 
@@ -87,6 +88,7 @@ export function createBapScmProvider(
     // 正在刷新：不并发，标记排队，返回当前（上次）结果
     if (refreshing) {
       refreshQueued = true;
+      refreshQueuedForce = refreshQueuedForce || force;
       return changes;
     }
     refreshing = true;
@@ -103,10 +105,12 @@ export function createBapScmProvider(
       // 期间有变更请求：距上次刷新结束足够久则立即再刷，否则再 debounce（限间隔）
       if (refreshQueued) {
         refreshQueued = false;
+        const queuedForce = refreshQueuedForce;
+        refreshQueuedForce = false;
         if (Date.now() - lastRefreshEnd >= MIN_REFRESH_INTERVAL_MS) {
-          void refresh();
+          void refresh(queuedForce);
         } else {
-          scheduleRefresh();
+          scheduleRefresh(queuedForce);
         }
       }
     }
@@ -163,9 +167,23 @@ export function createBapScmProvider(
     return lastChanges.find((c) => c.absolutePath === fsPath);
   }
 
+  /** 提交回读验证告警：云端内容与提交内容不一致（疑似服务端转码损坏）时弹出。 */
+  function warnVerify(result: { verifyWarnings?: string[] }): void {
+    if (result.verifyWarnings?.length) {
+      const detail = result.verifyWarnings.slice(0, 5).join('\n');
+      const more = result.verifyWarnings.length > 5 ? `\n…等 ${result.verifyWarnings.length} 个文件` : '';
+      void vscode.window
+        .showWarningMessage('BAP: 云端存下来的内容与提交的内容不一致，重新拉取可能得到乱码！', { modal: true }, '知道了')
+        .then(() => {
+          void vscode.window.showInformationMessage(detail + more, { modal: true });
+        });
+    }
+  }
+
   /** 提交单个文件到云端。 */
   async function commitFile(change: Change, comment = ''): Promise<void> {
-    await sdk.code.saveChanges([change], comment);
+    const r = await sdk.code.saveChanges([change], comment);
+    warnVerify(r);
     await refresh(true);
   }
 
@@ -181,7 +199,8 @@ export function createBapScmProvider(
       void vscode.window.showWarningMessage('BAP: 没有更改可提交');
       return;
     }
-    await sdk.code.saveChanges(changes, comment);
+    const r = await sdk.code.saveChanges(changes, comment);
+    warnVerify(r);
     await refresh(true);
   }
 
@@ -201,10 +220,10 @@ export function createBapScmProvider(
   const subscriptions: vscode.Disposable[] = [];
 
   let debounceTimer: NodeJS.Timeout | undefined;
-  function scheduleRefresh(): void {
+  function scheduleRefresh(force = false): void {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      void refresh();
+      void refresh(force);
     }, opts.debounceMs ?? 500);
   }
 
@@ -235,7 +254,8 @@ export function createBapScmProvider(
       void vscode.window.showWarningMessage('BAP: 没有更改可提交。');
       return;
     }
-    await sdk.code.saveChanges(toCommit, comment);
+    const r = await sdk.code.saveChanges(toCommit, comment);
+    warnVerify(r);
     await refresh(true);
   }
 
