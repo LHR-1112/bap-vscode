@@ -40,6 +40,12 @@
     以及差异处是否全为 `?`），让这类「提交内容与云端不符」的问题当场可见、可定位。
   - 另单独检测「本地文件在提交往返期间被改写」（构建产物 / 编辑器热保存），与「云端存坏」
     区分开——两者现象相似但根因完全不同。
+- **下载工程时写入的 `.vscode/settings.json` 补齐 BAP 开发所需的 Java / 编辑器设置**
+  - Java：`compile.nullAnalysis.mode=automatic`、`completion.guessMethodArguments=insertBestGuessedArguments`、
+    `completion.postfix.enabled`、`updateImportsOnPaste.enabled`、`inlayHints.parameterNames.enabled=none`。
+  - 编辑器：`editor.suggestSelection=recentlyUsedByPrefix`、`editor.tabCompletion=on`。
+  - `[java]` 语言级：Tab 缩进 4 空格（`insertSpaces=true`）、保存时整理 import
+    （`codeActionsOnSave.source.organizeImports=explicit`）。
 
 ## [1.0.3] - 2026-09-02
 

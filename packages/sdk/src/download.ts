@@ -69,7 +69,8 @@ const isJavaVersion8 = (javaBin: string): boolean => {
 };
 
 /**
- * 写 <destDir>/.vscode/settings.json 声明 JavaSE-1.8；jdkPath 为空则 runtimes 项不带 path。
+ * 写 <destDir>/.vscode/settings.json：JDK 1.8 runtime + 一组适配 BAP 开发的 Java/编辑器设置。
+ * jdkPath 为空则 runtimes 项不带 path。
  */
 export function writeJavaSettings(destDir: string, jdkPath?: string): void {
   const vscodeDir = path.join(destDir, '.vscode');
@@ -79,6 +80,18 @@ export function writeJavaSettings(destDir: string, jdkPath?: string): void {
   const settings = {
     'java.configuration.runtimes': runtimes,
     'java.configuration.runtime': { default: 'JavaSE-1.8' },
+    'java.compile.nullAnalysis.mode': 'automatic',
+    'java.completion.guessMethodArguments': 'insertBestGuessedArguments',
+    'java.completion.postfix.enabled': true,
+    'java.updateImportsOnPaste.enabled': true,
+    'java.inlayHints.parameterNames.enabled': 'none',
+    'editor.suggestSelection': 'recentlyUsedByPrefix',
+    'editor.tabCompletion': 'on',
+    '[java]': {
+      'editor.tabSize': 4,
+      'editor.insertSpaces': true,
+      'editor.codeActionsOnSave': { 'source.organizeImports': 'explicit' },
+    },
   };
   fs.writeFileSync(path.join(vscodeDir, 'settings.json'), JSON.stringify(settings, null, 2), 'utf8');
 }
