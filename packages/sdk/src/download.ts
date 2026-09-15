@@ -68,16 +68,56 @@ const isJavaVersion8 = (javaBin: string): boolean => {
   }
 };
 
+/** writeJavaSettings 的结果。 */
+export type JavaSettingsResult = 'created' | 'merged' | 'skipped';
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * 递归合并设置：同名键以 override 为准；双方都是对象时逐层合并，
+ * 这样 `[java]` 块里用户自己的其它设置不会被整块覆盖。数组整体替换。
+ */
+function mergeSettings(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(override)) {
+    const prev = out[k];
+    out[k] = isPlainObject(prev) && isPlainObject(v) ? mergeSettings(prev, v) : v;
+  }
+  return out;
+}
+
 /**
  * 写 <destDir>/.vscode/settings.json：JDK 1.8 runtime + 一组适配 BAP 开发的 Java/编辑器设置。
  * jdkPath 为空则 runtimes 项不带 path。
+ *
+ * 目标目录已有 settings.json 时**先读出来再合并**：用户自己的其它设置原样保留，只有同名的
+ * 插件托管键以本次为准（否则换 JDK 后旧的 runtime 路径会残留）。已存在但无法解析
+ * （例如 VS Code 允许的 JSONC 注释、尾逗号）时**放弃写入**——宁可少配，也不要损坏用户文件。
+ *
+ * @returns 'created' 新建 / 'merged' 合并写入 / 'skipped' 因已有文件不可解析而跳过
  */
-export function writeJavaSettings(destDir: string, jdkPath?: string): void {
+export function writeJavaSettings(destDir: string, jdkPath?: string): JavaSettingsResult {
   const vscodeDir = path.join(destDir, '.vscode');
-  fs.mkdirSync(vscodeDir, { recursive: true });
+  const settingsFile = path.join(vscodeDir, 'settings.json');
+
+  let existing: Record<string, unknown> = {};
+  let existed = false;
+  if (fs.existsSync(settingsFile)) {
+    existed = true;
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+      if (!isPlainObject(parsed)) return 'skipped';
+      existing = parsed;
+    } catch {
+      return 'skipped';
+    }
+  }
+
   const runtimes: Array<{ name: string; path?: string; default?: boolean }> = [{ name: 'JavaSE-1.8', default: true }];
   if (jdkPath) runtimes[0].path = jdkPath;
-  const settings = {
+  const bapSettings: Record<string, unknown> = {
     'java.configuration.runtimes': runtimes,
     'java.configuration.runtime': { default: 'JavaSE-1.8' },
     'java.compile.nullAnalysis.mode': 'automatic',
@@ -93,5 +133,8 @@ export function writeJavaSettings(destDir: string, jdkPath?: string): void {
       'editor.codeActionsOnSave': { 'source.organizeImports': 'explicit' },
     },
   };
-  fs.writeFileSync(path.join(vscodeDir, 'settings.json'), JSON.stringify(settings, null, 2), 'utf8');
+
+  fs.mkdirSync(vscodeDir, { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify(mergeSettings(existing, bapSettings), null, 2), 'utf8');
+  return existed ? 'merged' : 'created';
 }

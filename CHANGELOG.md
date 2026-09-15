@@ -46,6 +46,10 @@
   - 编辑器：`editor.suggestSelection=recentlyUsedByPrefix`、`editor.tabCompletion=on`。
   - `[java]` 语言级：Tab 缩进 4 空格（`insertSpaces=true`）、保存时整理 import
     （`codeActionsOnSave.source.organizeImports=explicit`）。
+  - **改为「读取已有内容再合并」**：目标目录若已有 `settings.json`，用户自己的其它设置原样保留
+    （`[java]` 块也逐层合并），只有同名的插件托管键以本次为准（否则换 JDK 后旧 runtime 路径会残留）。
+    已有文件无法解析时（含注释的 JSONC、根不是对象）**放弃写入**并在输出面板与提示中说明——
+    宁可少配，也不损坏用户文件。
 
 ## [1.0.3] - 2026-09-02
 

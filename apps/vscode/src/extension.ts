@@ -166,7 +166,17 @@ export function activate(context: vscode.ExtensionContext): void {
           log.appendLine('[downloadProject] 下载完成，写 .vscode/settings.json');
           const configured = vscode.workspace.getConfiguration('bapIde').get<string>('java8Path');
           const jdk = configured && configured.trim() ? configured.trim() : detectJdk8();
-          writeJavaSettings(destDir, jdk);
+          const settingsResult = writeJavaSettings(destDir, jdk);
+          log.appendLine(
+            settingsResult === 'skipped'
+              ? '[downloadProject] .vscode/settings.json 已存在但无法解析（可能含注释），为避免覆盖已跳过写入'
+              : `[downloadProject] .vscode/settings.json ${settingsResult === 'merged' ? '已合并写入（保留了原有设置）' : '已新建'}`,
+          );
+          if (settingsResult === 'skipped') {
+            void vscode.window.showWarningMessage(
+              'BAP: 目标目录已有 .vscode/settings.json 但无法解析（可能含注释），为免覆盖已跳过写入 BAP 推荐设置。',
+            );
+          }
           if (!jdk) void vscode.window.showWarningMessage('BAP: 未检测到 JDK 1.8，已写入 JavaSE-1.8 配置，请在插件设置中填 bapIde.java8Path 或手动补 path');
           await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), false);
           log.appendLine(`[downloadProject] 完成，destDir=${destDir}`);

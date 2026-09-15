@@ -17,7 +17,7 @@ export { buildDebugCode } from './debug';
 export { runUnitTests, parseTestSummary } from './test';
 export type { TestOptions, TestResult } from './test';
 export { downloadProject, detectJdk8, writeJavaSettings, DOWNLOAD_TIMEOUT_MS } from './download';
-export type { DownloadOptions } from './download';
+export type { DownloadOptions, JavaSettingsResult } from './download';
 
 export type {
   Status,
