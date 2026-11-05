@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.5] - 2026-11-05
+
+### 新增
+
+- **MCP 工具按工程路由（P1-7）**
+  - 新增工作区级工具 `workspaceInfo`（第 18 个工具）：列出 workspace folders、后端工程（projectId / 工程名 / 路径 / 云端 uuid / 注册状态）、MCP 模式与可用工具；不返回任何密码。
+  - 15 个工程级工具新增可选 `project` 参数：projectId 精确 → projectUuid（忽略大小写）→ 工程名（先精确、后忽略大小写）；任一类别多命中即 `AMBIGUOUS` 并附候选。只有一个工程时可省略；多工程省略不会回退到活动编辑器 / 上次使用，而是返回歧义错误。
+  - 工程级工具结果统一为 `{ project: { projectId, displayName, root }, result }`；`workspaceInfo` / `listProjects` / `downloadProject` 为工作区级工具，不包 envelope。
+  - 错误载荷支持 `code` / `candidates`，MCP 返回文本末尾附 `BAP_MCP_ERROR_META`，便于 AI 解析候选工程。
+- **MCP 引导模式（P1-8）**
+  - 窗口至少打开一个 workspace folder、但没有 `.develop` 时，MCP 以 bootstrap 模式启动，仅暴露 `workspaceInfo` / `listProjects` / `downloadProject`；宿主侧同时校验模式（`BOOTSTRAP_MODE`），不只依赖工具列表。
+  - `downloadProject` 作为自举入口；下载后加入工作区并重载窗口，完整工具集才生效。`.develop` 出现 / 消失时提示重载；重载后外部 AI 客户端会自动重连并刷新工具列表。
+  - 引导模式下 `listProjects` 支持用显式 `uri/user/pwd` 直连服务器。
+- **Agent 配置安全写入（P1-9）**
+  - `CLAUDE.md` / `AGENTS.md` 改为按 BAP 标记段合并：只替换插件生成的段落，保留用户手写内容；支持重复段清理、CRLF/BOM 保持、幂等。
+  - 损坏的 `.mcp.json`（非法 JSON / 根或 `mcpServers` 非对象）会跳过写入并警告，**不再重建或覆盖**；`.codex/config.toml` 读写异常同样降级为警告。
+- **技能安装（P1-11）**
+  - 新增命令 `BAP: Install Skills`：枚举随扩展打包的全部 skill，复制到 `<VotaForge 根>/.votaforge/skill/<skill名>`；覆盖同名目录前模态确认，符号链接与构建产物跳过。
+  - `build` 阶段新增 `stage-skills.js`，把仓库根 `skill/` 打进 VSIX；F5 开发时回退到仓库 `skill/`。
+- **多工程文档与生成内容（P1-12）**
+  - README / `skill/bap-vscode-mcp` / 生成的 Agent 指令去掉单工程假设，说明 `project` 参数、引导模式、返回结构、技能安装路径与 VotaForge 顶层 routing skill 的职责边界。
+
+### 优化
+
+- `mcp-server` 子进程按工具类型设置 IPC 超时：下载 / 发布 / 单测 30 分钟，编译 / 同步依赖 10 分钟，重定向 / 项目列表 / 提交 / 更新全部 5 分钟，其余 30 秒。
+- `mcp-server` 在宿主 IPC 断开（窗口重载 / 重启）后自动重连：重读 `~/.bap/mcp-ipc`、重新拉取工具列表并发送 `notifications/tools/list_changed`，外部客户端无需重启。
+- MCP 工具参数清洗不再剔除 `project`（内部路由键 `__project*` 仍会剔除）。
+- `listProjects` 在无工程时给出明确的下载 / 直连指引；下载成功提示补充重载窗口说明。
+- 扩展激活失败时仍注册 MCP provider（回退 bootstrap），保留自举能力。
+
+### 修复
+
+- 修复 `Reset Agent Instructions` 整文件覆盖 `CLAUDE.md` / `AGENTS.md` 导致用户内容丢失的问题。
+- 修复损坏 `.mcp.json` 被静默重建的问题。
+- 修复多窗口退出时可能误删其它窗口 IPC 端点文件的问题（仅当内容仍指向本窗口时删除）。
+
 ## [1.0.4] - 2026-09-15
 
 ### 修复

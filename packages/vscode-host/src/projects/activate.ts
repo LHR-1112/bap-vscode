@@ -209,6 +209,7 @@ export function activateBackendProjects(opts: ActivateBackendProjectsOptions): A
   const commands = registerProjectCommands({
     context: opts.context,
     registry,
+    launch: opts.launch,
     log,
     mcpServerPath: opts.mcpServerPath,
   });

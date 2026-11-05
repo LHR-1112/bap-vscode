@@ -519,8 +519,12 @@ export function activateScm(
         // 2) Claude Code MCP 配置（工程级 .mcp.json）
         const mcpServerPath = path.join(context.extensionPath, 'dist', 'mcp-server.js');
         const mcpJsonFile = path.join(workspaceRoot, '.mcp.json');
-        const mcpJson = mergeMcpJson(fs.existsSync(mcpJsonFile) ? fs.readFileSync(mcpJsonFile, 'utf8') : undefined, mcpServerPath);
-        fs.writeFileSync(mcpJsonFile, mcpJson);
+        const mcpResult = mergeMcpJson(fs.existsSync(mcpJsonFile) ? fs.readFileSync(mcpJsonFile, 'utf8') : undefined, mcpServerPath);
+        if (mcpResult.ok) {
+          fs.writeFileSync(mcpJsonFile, mcpResult.content);
+        } else {
+          log.error(`[resetAgentInstructions] 跳过写入 .mcp.json：${mcpResult.message}`);
+        }
         // 3) Codex MCP 配置（工程级 .codex/config.toml）
         const codexDir = path.join(workspaceRoot, '.codex');
         const codexFile = path.join(codexDir, 'config.toml');

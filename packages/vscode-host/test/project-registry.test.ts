@@ -232,3 +232,103 @@ describe('BackendProjectRegistry 重复检出与批量', () => {
     expect(res[0].source).toBe('explicit-id');
   });
 });
+
+describe('MCP project 参数解析（projectRef）', () => {
+  function twoProjects() {
+    mkProject(path.join(tmp, 'p1'), 'uuid-1');
+    mkProject(path.join(tmp, 'p2'), 'uuid-2');
+    return makeRegistry(descriptorsFrom(scanBackendProjectRoots([tmp])));
+  }
+
+  it('projectId 精确匹配', async () => {
+    const registry = twoProjects();
+    const descriptors = descriptorsFrom(scanBackendProjectRoots([tmp]));
+    const id = descriptors.find((d) => d.name === 'p2')!.projectId;
+    const res = await registry.resolve({ projectRef: id });
+    expect(res.source).toBe('explicit-ref');
+    expect(res.explicit).toBe(true);
+    expect(res.context.root).toBe(path.join(tmp, 'p2'));
+  });
+
+  it('projectUuid 忽略大小写', async () => {
+    const registry = twoProjects();
+    const res = await registry.resolve({ projectRef: 'UUID-2' });
+    expect(res.context.root).toBe(path.join(tmp, 'p2'));
+  });
+
+  it('工程名先精确、再忽略大小写', async () => {
+    const registry = twoProjects();
+    expect((await registry.resolve({ projectRef: 'p1' })).context.root).toBe(path.join(tmp, 'p1'));
+    expect((await registry.resolve({ projectRef: 'P2' })).context.root).toBe(path.join(tmp, 'p2'));
+  });
+
+  it('uuid 优先于同名工程', async () => {
+    // 目录名 uuid-1（展示名）与另一工程的 uuid 冲突：uuid 类别先命中。
+    mkProject(path.join(tmp, 'uuid-1'), 'other-uuid');
+    mkProject(path.join(tmp, 'p2'), 'UUID-1');
+    const registry = makeRegistry(descriptorsFrom(scanBackendProjectRoots([tmp])));
+    const res = await registry.resolve({ projectRef: 'uuid-1' });
+    expect(res.context.root).toBe(path.join(tmp, 'p2'));
+  });
+
+  it('同一 uuid 多份检出 → AMBIGUOUS，候选只含匹配项', async () => {
+    mkProject(path.join(tmp, 'p1'), 'same-uuid');
+    mkProject(path.join(tmp, 'p2'), 'same-uuid');
+    mkProject(path.join(tmp, 'p3'), 'other');
+    const registry = makeRegistry(descriptorsFrom(scanBackendProjectRoots([tmp])));
+    const p = registry.resolve({ projectRef: 'SAME-UUID' });
+    await expectCode(p, 'AMBIGUOUS');
+    await p.catch((e: ProjectResolutionError) => {
+      expect(e.candidates.map((c) => c.root).sort()).toEqual([
+        path.join(tmp, 'p1'),
+        path.join(tmp, 'p2'),
+      ]);
+    });
+  });
+
+  it('未知工程 → UNKNOWN_PROJECT，带全部候选', async () => {
+    const registry = twoProjects();
+    const p = registry.resolve({ projectRef: 'nope' });
+    await expectCode(p, 'UNKNOWN_PROJECT');
+    await p.catch((e: ProjectResolutionError) => {
+      expect(e.candidates).toHaveLength(2);
+      expect(e.message).toContain('projectId');
+    });
+  });
+
+  it('空白 project → INVALID_PROJECT', async () => {
+    const registry = twoProjects();
+    const p = registry.resolve({ projectRef: '   ' });
+    await expectCode(p, 'INVALID_PROJECT');
+    await p.catch((e: ProjectResolutionError) => {
+      expect(e.candidates).toHaveLength(2);
+    });
+  });
+
+  it('严格工具模式：有活动编辑器 / 上次使用也不回退', async () => {
+    mkProject(path.join(tmp, 'p1'), 'uuid-1');
+    mkProject(path.join(tmp, 'p2'), 'uuid-2');
+    const descriptors = descriptorsFrom(scanBackendProjectRoots([tmp]));
+    const registry = makeRegistry(descriptors, { activePath: path.join(tmp, 'p1', 'src', 'A.java') });
+    // 先显式使用 p2，制造 last-used
+    await registry.resolve({ projectId: descriptors.find((d) => d.name === 'p2')!.projectId });
+    const p = registry.resolve(
+      {},
+      { interactive: false, allowActiveEditor: false, allowLastUsed: false, suggestProjectParam: true },
+    );
+    await expectCode(p, 'AMBIGUOUS');
+    await p.catch((e: ProjectResolutionError) => {
+      expect(e.message).toContain('project');
+    });
+  });
+
+  it('显式 projectRef 在重复检出下仍允许写操作', async () => {
+    mkProject(path.join(tmp, 'p1'), 'same-uuid');
+    mkProject(path.join(tmp, 'p2'), 'same-uuid');
+    const registry = makeRegistry(descriptorsFrom(scanBackendProjectRoots([tmp])));
+    const descriptors = descriptorsFrom(scanBackendProjectRoots([tmp]));
+    const id = descriptors.find((d) => d.name === 'p1')!.projectId;
+    const res = await registry.resolve({ projectRef: id }, { forWrite: true });
+    expect(res.context.root).toBe(path.join(tmp, 'p1'));
+  });
+});

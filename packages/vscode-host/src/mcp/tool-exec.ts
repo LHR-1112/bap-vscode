@@ -9,8 +9,9 @@ export interface McpToolCtx {
   bapScm: BapScmProviderHandle;
   workspaceRoot: string;
   log: { debug(msg: string): void; error(msg: string): void };
-  /** 解析出的工程 ID（多工程；M1 工具参数不暴露，仅供日志/诊断）。 */
+  /** 解析出的工程 ID / 展示名（用于工具结果的 project envelope）。 */
   projectId?: string;
+  displayName?: string;
   /** 写操作：工程身份校验 + 串行执行（重定向等改 .develop 的操作也走这里）。 */
   runWrite?<T>(fn: () => Promise<T>): Promise<T>;
   /** 独占操作：编译/测试/调试等重任务，避免同工程并发。 */
@@ -26,7 +27,26 @@ export interface ToolArg {
 }
 
 export const isToolCall = (a: unknown): a is ToolArg =>
-  !!a && typeof a === 'object' && '__tool' in (a as Record<string, unknown>);
+  !!a && typeof a === 'object' && (a as Record<string, unknown>).__tool === true;
+
+/** 工程级工具的统一返回结构（P1-7）：调用方总能知道实际作用到了哪个工程。 */
+export interface ProjectToolEnvelope<T> {
+  project: { projectId: string; displayName: string; root: string };
+  result: T;
+}
+
+/** 把工程级工具的执行结果包一层；undefined 统一转 null（JSON 友好）。 */
+export function wrapProjectResult<T>(ctx: McpToolCtx, result: T): ProjectToolEnvelope<T | null> {
+  const projectId = ctx.projectId ?? ctx.workspaceRoot;
+  return {
+    project: {
+      projectId,
+      displayName: ctx.displayName ?? projectId,
+      root: ctx.workspaceRoot,
+    },
+    result: result === undefined ? null : result,
+  };
+}
 
 /** 按 fullClass/path 从当前变更里解析 Change（commitFile/updateFile 需要）。 */
 function resolveChange(ctx: McpToolCtx, a: ToolArg): Change {

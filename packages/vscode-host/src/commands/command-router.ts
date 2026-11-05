@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Change, CJavaProjectDto, RelocateProfile } from '@bap/sdk';
+import type { BridgeLaunchConfig } from '@bap/rpc';
 import {
   addRelocateHistory,
   loadDevelop,
@@ -15,14 +16,20 @@ import {
 } from '@bap/sdk';
 import type { BackendProjectRegistry, ProjectRequest } from '../projects/project-registry';
 import type { BackendProjectContext } from '../projects/project-context';
-import { isProjectResolutionError } from '../projects/project-errors';
+import { ProjectResolutionError, isProjectResolutionError } from '../projects/project-errors';
 import { readProjectIdentity } from '../projects/project-identity';
 import { deriveFullClass } from '../projects/project-paths';
-import { isToolCall, execTool, type McpToolCtx, type ToolArg } from '../mcp/tool-exec';
-import { collectAgentProjectInfo, buildAgentFileContent } from '../agent/agent-instructions';
+import { isToolCall, execTool, wrapProjectResult, type McpToolCtx, type ToolArg } from '../mcp/tool-exec';
+import { isProjectScopedTool } from '../mcp/tools';
+import { collectAgentProjectInfo, buildAgentFileContent, type AgentGenerationContext } from '../agent/agent-instructions';
+import { mergeMarkedSection } from '../agent/markdown-merge';
 import { mergeMcpJson, mergeCodexToml } from '../agent/mcp-config';
 import { groupToStatus, bapOriginalUriSpec } from '../scm/types';
 import { openHistoryView } from '../history/history-view';
+import { discoverBackendProjectDescriptors } from '../backend-projects-vscode';
+import { findVfWorkspaceRoot } from '../backend-projects';
+import { buildWorkspaceInfo } from '../projects/workspace-info';
+import { probeServerProjects } from '../projects/server-probe';
 
 export interface ProjectCommandOptions {
   context: vscode.ExtensionContext;
@@ -30,6 +37,8 @@ export interface ProjectCommandOptions {
   log: { debug(msg: string): void; error(msg: string): void };
   /** MCP 配置里 mcp-server.js 的路径（resetAgentInstructions 用）。 */
   mcpServerPath: string;
+  /** Java 桥 launch（bootstrap listProjects 直连服务器用）。 */
+  launch: BridgeLaunchConfig;
 }
 
 interface BatchOk<T> {
@@ -129,6 +138,7 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
       workspaceRoot: ctx.root,
       log,
       projectId: ctx.projectId,
+      displayName: ctx.displayName,
       runWrite: (fn) => ctx.runWrite(fn),
       runExclusive: (fn) => ctx.runExclusive(fn),
       afterRedirect: () => {
@@ -138,9 +148,33 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
     };
   }
 
-  /** 工具调用：非交互解析到单一工程（多工程且无活动编辑器/上次使用时报 AMBIGUOUS）。 */
-  async function resolveForTool(): Promise<BackendProjectContext> {
-    const res = await registry.resolve({}, { interactive: false, purpose: '选择后端工程' });
+  /** 工具调用的 project 参数：只接受字符串；其它类型直接判为非法。 */
+  function projectRefFromArg(arg: unknown): string | undefined {
+    if (!arg || typeof arg !== 'object') return undefined;
+    const value = (arg as Record<string, unknown>).project;
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'string') {
+      throw new ProjectResolutionError(
+        'project 参数必须是字符串（projectId / projectUuid / 工程名）；可用 workspaceInfo 查询候选',
+        'INVALID_PROJECT',
+      );
+    }
+    return value;
+  }
+
+  /**
+   * 工具调用：非交互解析到单一工程。
+   * 指定 project 时按 projectId → projectUuid → 工程名解析；未指定时**不做**活动编辑器/
+   * 上次使用回退：0 个工程 NO_PROJECTS、1 个直接用、多个 AMBIGUOUS。
+   */
+  async function resolveForTool(projectRef?: string): Promise<BackendProjectContext> {
+    const res = await registry.resolve(projectRef !== undefined ? { projectRef } : {}, {
+      interactive: false,
+      suggestProjectParam: true,
+      allowActiveEditor: false,
+      allowLastUsed: false,
+      purpose: '选择后端工程',
+    });
     registry.markUsed(res.context.projectId);
     return res.context;
   }
@@ -175,11 +209,16 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
     ui: (arg: unknown) => Promise<unknown>,
   ): (arg: unknown) => Promise<unknown> {
     return async (arg) => {
-      if (isToolCall(arg)) {
-        const ctx = await resolveForTool();
-        return execTool(toolCtx(ctx), toolName, arg as ToolArg);
-      }
-      return ui(arg);
+      if (!isToolCall(arg)) return ui(arg);
+      const projectRef = projectRefFromArg(arg);
+      // project 是路由参数，不进入 execTool 的业务参数。
+      const rest: Record<string, unknown> = { ...(arg as Record<string, unknown>) };
+      delete rest.project;
+      const ctx = await resolveForTool(projectRef);
+      const mcpCtx = toolCtx(ctx);
+      const result = await execTool(mcpCtx, toolName, { __tool: true, ...rest } as ToolArg);
+      // 工作区级工具（workspaceInfo/listProjects/downloadProject）保持原结果；工程级工具统一包 envelope。
+      return isProjectScopedTool(toolName) ? wrapProjectResult(mcpCtx, result) : result;
     };
   }
 
@@ -628,14 +667,77 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
       }),
     ),
 
-    command(
-      'bapIde.listProjects',
-      toolCommand('listProjects', async (arg) => {
+    command('bapIde.workspaceInfo', async (arg) => {
+      const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => ({
+        name: f.name,
+        fsPath: f.uri.fsPath,
+        scheme: f.uri.scheme,
+      }));
+      // MCP 宿主导入调用方进程实际生效的模式；UI 调用（无该字段）按当前窗口状态推断。
+      const injected =
+        arg && typeof arg === 'object' ? (arg as Record<string, unknown>).__mcpMode : undefined;
+      const mode = injected === 'full' || injected === 'bootstrap' ? injected : undefined;
+      const info = buildWorkspaceInfo({
+        workspaceFolders: folders,
+        descriptors: discoverBackendProjectDescriptors(),
+        registeredProjectIds: new Set(registry.getAll().map((c) => c.projectId)),
+        ...(mode ? { mode } : {}),
+      });
+      if (!isToolCall(arg)) {
+        void vscode.window.showInformationMessage(
+          `BAP: ${info.projects.length} 个后端工程，MCP ${info.mcp.mode === 'full' ? '完整工具集' : '引导模式（仅 workspaceInfo/listProjects/downloadProject）'}`,
+        );
+      }
+      return info;
+    }),
+
+    command('bapIde.listProjects', async (arg) => {
+      if (!isToolCall(arg)) {
         const ctx = await resolveOneForUi(arg, '列出项目');
         const list = (await ctx.runExclusive(() => ctx.ensureSdk().project.list())) as CJavaProjectDto[];
         void vscode.window.setStatusBarMessage(`BAP: [${ctx.displayName}] 当前环境 ${list.length} 个工程`, 5000);
-      }),
-    ),
+        return undefined;
+      }
+
+      const a = arg as Record<string, unknown>;
+      if (a.uri !== undefined || a.user !== undefined || a.pwd !== undefined) {
+        // 引导模式：显式凭据直连服务器（三者必须齐全，probeServerProjects 会校验）。
+        return probeServerProjects(opts.launch, {
+          uri: typeof a.uri === 'string' ? a.uri : '',
+          user: typeof a.user === 'string' ? a.user : '',
+          pwd: typeof a.pwd === 'string' ? a.pwd : '',
+        });
+      }
+
+      if (registry.getAll().length === 0) {
+        const live = discoverBackendProjectDescriptors();
+        const msg =
+          live.length > 0
+            ? '后端工程已在文件系统中，但尚未加入工作区/重载窗口；请重载后重试，或提供 uri/user/pwd 直连服务器'
+            : '未发现后端工程；请先调用 downloadProject，或提供 uri/user/pwd 直连服务器';
+        throw new ProjectResolutionError(
+          msg,
+          'NO_PROJECTS',
+          live.map((d) => ({ projectId: d.projectId, displayName: d.displayName, root: d.root })),
+        );
+      }
+
+      let ctx: BackendProjectContext;
+      try {
+        // 允许活动编辑器 / 上次使用回退（listProjects 只需一个可用连接）。
+        ctx = (await registry.resolve({}, { interactive: false })).context;
+      } catch (e) {
+        if (isProjectResolutionError(e) && e.code === 'AMBIGUOUS') {
+          throw new ProjectResolutionError(
+            '窗口内有多个后端工程，无法确定用哪个连接；请提供 uri/user/pwd 直连服务器，或打开目标工程的文件后重试',
+            'AMBIGUOUS',
+            e.candidates,
+          );
+        }
+        throw e;
+      }
+      return execTool(toolCtx(ctx), 'listProjects', { __tool: true });
+    }),
 
     command(
       'bapIde.fetchCurrent',
@@ -649,35 +751,94 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
       const contexts = await resolveManyForUi(arg, '重建 Agent 指令', true);
       const names = contexts.map((c) => `「${c.displayName}」`).join('、');
       const msg = await vscode.window.showWarningMessage(
-        `重建 ${names} 的 CLAUDE.md、AGENTS.md，并为 Claude Code（.mcp.json）与 Codex（.codex/config.toml）写入 MCP 配置？`,
+        `重建 ${names} 的 CLAUDE.md、AGENTS.md，并为 Claude Code（.mcp.json）与 Codex（.codex/config.toml）写入 MCP 配置？\n已有内容会按 BAP 标记段合并；损坏的 .mcp.json 会跳过并警告。`,
         { modal: true },
         '重建',
       );
       if (msg !== '重建') return;
+
+      const warnings: string[] = [];
+      const workspaceFolderPaths = (vscode.workspace.workspaceFolders ?? [])
+        .filter((f) => f.uri.scheme === 'file')
+        .map((f) => f.uri.fsPath);
+      const allProjects = registry.getAll();
+      const readIfExists = (file: string): string | undefined =>
+        fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined;
+
       const results = await runMany('重建 Agent 指令', contexts.map((context) => ({ context })), async (ctx) => {
         await ctx.runWrite(async () => {
           const info = collectAgentProjectInfo(ctx.root);
-          const content = buildAgentFileContent(info);
-          fs.writeFileSync(path.join(ctx.root, 'CLAUDE.md'), content);
-          fs.writeFileSync(path.join(ctx.root, 'AGENTS.md'), content);
+          const vfRoot = findVfWorkspaceRoot(ctx.root, workspaceFolderPaths);
+          // skill 只在用户显式执行 BAP: Install Skills 后存在；未安装时不要把“已安装到”写进指令。
+          // 判定口径与 skill-installer 一致：必须存在普通文件 SKILL.md，空目录/残缺残留视为未安装。
+          const skillInstallPath = vfRoot
+            ? path.join(vfRoot, '.votaforge', 'skill', 'bap-vscode-mcp')
+            : undefined;
+          const skillInstalled =
+            !!skillInstallPath &&
+            (() => {
+              try {
+                return fs.lstatSync(path.join(skillInstallPath, 'SKILL.md')).isFile();
+              } catch {
+                return false;
+              }
+            })();
+          const generationCtx: AgentGenerationContext = {
+            currentProjectId: ctx.projectId,
+            currentDisplayName: ctx.displayName,
+            projectCount: allProjects.length,
+            siblings: allProjects.map((o) => ({
+              projectId: o.projectId,
+              displayName: o.displayName,
+              root: o.root,
+              current: o.projectId === ctx.projectId,
+            })),
+            ...(vfRoot ? { vfRoot } : {}),
+            ...(skillInstalled ? { skillInstallPath } : {}),
+          };
+          const content = buildAgentFileContent(info, generationCtx);
+
+          for (const filename of ['CLAUDE.md', 'AGENTS.md']) {
+            const file = path.join(ctx.root, filename);
+            try {
+              const merged = mergeMarkedSection(readIfExists(file), content);
+              if (merged.warning) warnings.push(`[${ctx.displayName}] ${filename}: ${merged.warning}`);
+              fs.writeFileSync(file, merged.content);
+            } catch (e) {
+              warnings.push(
+                `[${ctx.displayName}] ${filename} 读写失败，已跳过：${errorMessage(e)}`,
+              );
+            }
+          }
+
           const mcpJsonFile = path.join(ctx.root, '.mcp.json');
-          const mcpJson = mergeMcpJson(
-            fs.existsSync(mcpJsonFile) ? fs.readFileSync(mcpJsonFile, 'utf8') : undefined,
-            opts.mcpServerPath,
-          );
-          fs.writeFileSync(mcpJsonFile, mcpJson);
+          try {
+            const merged = mergeMcpJson(readIfExists(mcpJsonFile), opts.mcpServerPath);
+            if (merged.ok) fs.writeFileSync(mcpJsonFile, merged.content);
+            else warnings.push(`[${ctx.displayName}] ${merged.message}`);
+          } catch (e) {
+            warnings.push(`[${ctx.displayName}] .mcp.json 读写失败，已跳过：${errorMessage(e)}`);
+          }
+
           const codexDir = path.join(ctx.root, '.codex');
           const codexFile = path.join(codexDir, 'config.toml');
-          const codexToml = mergeCodexToml(
-            fs.existsSync(codexFile) ? fs.readFileSync(codexFile, 'utf8') : undefined,
-            opts.mcpServerPath,
-          );
-          fs.mkdirSync(codexDir, { recursive: true });
-          fs.writeFileSync(codexFile, codexToml);
+          try {
+            const codexToml = mergeCodexToml(readIfExists(codexFile), opts.mcpServerPath);
+            fs.mkdirSync(codexDir, { recursive: true });
+            fs.writeFileSync(codexFile, codexToml);
+          } catch (e) {
+            warnings.push(
+              `[${ctx.displayName}] .codex/config.toml 读写失败，已跳过：${errorMessage(e)}`,
+            );
+          }
         });
         return true;
       });
       finish('重建 Agent 指令', results, '已重建 Agent 指令与 MCP 配置（重启 Claude Code / 重载 Codex 生效）');
+      if (warnings.length > 0) {
+        const detail = warnings.length > 10 ? `${warnings.slice(0, 10).join('\n')}\n…` : warnings.join('\n');
+        void vscode.window.showWarningMessage(`BAP: Agent 指令已重建，但有以下注意事项：\n${detail}`);
+      }
     }),
   );
 

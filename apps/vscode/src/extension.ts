@@ -12,10 +12,14 @@ import {
   registerMcpServerProvider,
   isToolCall,
   discoverBackendProjects,
+  findVfWorkspaceRoots,
   isVfWorkspaceRoot,
   sanitizeProjectDirName,
   resolveDownloadTargetDir,
   validateDownloadTarget,
+  resolveBundledSkillsRoot,
+  planSkillInstall,
+  installSkillPlan,
 } from '@bap/vscode-host';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -31,13 +35,71 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // MCP：注册 BAP MCP server 定义（VS Code 可发现；无 .develop 工作区时 resolve 钩子中止启动）
-  void registerMcpServerProvider(context, {
-    debug: (m) => log.appendLine(`[mcp] ${m}`),
-    error: (m) => log.appendLine(`[mcp][ERROR] ${m}`),
-  })
-    .then((d) => context.subscriptions.push(d))
-    .catch((e) => log.appendLine(`[activate][mcp] 注册失败: ${e instanceof Error ? e.message : String(e)}`));
+  // 领域 skill：仅在用户显式执行命令时安装，激活/下载时不自动写入。
+  // 枚举随扩展打包的全部 skill，复制到 <vf根>/.votaforge/skill/（不写死单个 skill）。
+  context.subscriptions.push(
+    vscode.commands.registerCommand('bapIde.installSkills', async () => {
+      const skillsRoot = resolveBundledSkillsRoot(context.extensionPath);
+      if (!skillsRoot) {
+        void vscode.window.showErrorMessage('BAP: 未找到随扩展打包的 skill（assets/skill 为空）');
+        return;
+      }
+      const folderPaths = (vscode.workspace.workspaceFolders ?? [])
+        .filter((f) => f.uri.scheme === 'file')
+        .map((f) => f.uri.fsPath);
+      const vfRoots = findVfWorkspaceRoots(folderPaths);
+      if (vfRoots.length === 0) {
+        void vscode.window.showWarningMessage(
+          'BAP: 当前工作区不是 VotaForge 工作区（未找到 votaforge.workspace.json 或 .votaforge/）',
+        );
+        return;
+      }
+      let vfRoot: string;
+      if (vfRoots.length === 1) {
+        vfRoot = vfRoots[0];
+      } else {
+        const picked = await vscode.window.showQuickPick(vfRoots, {
+          placeHolder: '选择要安装 skill 的 VotaForge 根',
+        });
+        if (!picked) return;
+        vfRoot = picked;
+      }
+      let plan: ReturnType<typeof planSkillInstall>;
+      try {
+        plan = planSkillInstall(skillsRoot, vfRoot);
+      } catch (e) {
+        void vscode.window.showErrorMessage(`BAP: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      const existing = plan.skills.filter((s) => s.exists);
+      const lines = plan.skills.map((s) =>
+        s.exists
+          ? `• ${s.name}（已存在，将覆盖${s.isSymlink ? '；符号链接将跳过' : ''}）`
+          : `• ${s.name}`,
+      );
+      const confirm = await vscode.window.showWarningMessage(
+        `将 ${plan.skills.length} 个 skill 安装到：\n${plan.targetRoot}\n\n${lines.join('\n')}`,
+        { modal: true },
+        existing.length > 0 ? '覆盖安装' : '安装',
+      );
+      if (!confirm) return;
+      const result = installSkillPlan(plan, { overwrite: existing.length > 0 });
+      log.appendLine(
+        `[installSkills] target=${plan.targetRoot} installed=${result.installed.join(',')} skipped=${result.skipped.map((s) => s.name).join(',')}`,
+      );
+      const parts = [`已安装 ${result.installed.length} 个 skill 到 ${plan.targetRoot}`];
+      if (result.skipped.length > 0) {
+        parts.push(`跳过：${result.skipped.map((s) => `${s.name}（${s.reason}）`).join('、')}`);
+      }
+      if (result.warnings.length > 0) parts.push(result.warnings.join('\n'));
+      const message = parts.join('\n');
+      if (result.skipped.length > 0 || result.warnings.length > 0) {
+        void vscode.window.showWarningMessage(message);
+      } else {
+        void vscode.window.showInformationMessage(message);
+      }
+    }),
+  );
 
   // 检查更新（手动 vsix 安装不支持自动更新，这里做「感知更新」）
   const cfg = vscode.workspace.getConfiguration('bapIde');
@@ -179,7 +241,7 @@ export function activate(context: vscode.ExtensionContext): void {
               onLog: (m) => log.appendLine(`[downloadProject] ${m}`),
             });
             applyJavaSettings(target.destDir, { quiet: true });
-            return `已下载到 ${target.destDir}（重新加载窗口后可在 SCM 中操作）`;
+            return `已下载到 ${target.destDir}（请确认目录已加入工作区；重新加载窗口后 SCM 与 MCP 完整工具集生效）`;
           } finally {
             await rpc.close();
           }
@@ -325,6 +387,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  let registeredProjectCount = 0;
   try {
     // Java 桥子进程：用扩展内捆绑的 bridge jar 资产（每个后端工程各自懒启动一个桥）。
     log.appendLine(`[activate] launch bridge, classpath=${launch.classpath[0]}`);
@@ -341,6 +404,7 @@ export function activate(context: vscode.ExtensionContext): void {
         error: (m) => log.appendLine(`[ERROR] ${m}`),
       },
     });
+    registeredProjectCount = activated.projectCount;
     context.subscriptions.push(...activated.disposables);
 
     if (activated.projectCount === 0) {
@@ -355,6 +419,19 @@ export function activate(context: vscode.ExtensionContext): void {
     log.appendLine(`[activate] 激活失败: ${msg}`);
     void vscode.window.showErrorMessage(`BAP IDE 激活失败，详见输出面板「BAP IDE」: ${e instanceof Error ? e.message : String(e)}`);
   }
+
+  // MCP：在工程注册之后注册 provider（引导模式需要知道激活期工程数）。
+  // 激活失败时仍注册（回退 0 → bootstrap），至少保留 workspaceInfo / listProjects / downloadProject 自举能力。
+  void registerMcpServerProvider(
+    context,
+    {
+      debug: (m) => log.appendLine(`[mcp] ${m}`),
+      error: (m) => log.appendLine(`[mcp][ERROR] ${m}`),
+    },
+    { getRegisteredProjectCount: () => registeredProjectCount },
+  )
+    .then((d) => context.subscriptions.push(d))
+    .catch((e) => log.appendLine(`[activate][mcp] 注册失败: ${e instanceof Error ? e.message : String(e)}`));
 }
 
 export function deactivate(): void {}

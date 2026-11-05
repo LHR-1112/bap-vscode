@@ -168,6 +168,45 @@ export function isVfWorkspaceRoot(root: string): boolean {
   return false;
 }
 
+/**
+ * 从 workspace folders 中找出所有 VotaForge 根（存在 votaforge.workspace.json 或 .votaforge/）。
+ * 按 realpath 去重并排序；返回原始路径写法。
+ */
+export function findVfWorkspaceRoots(workspaceFolders: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const folder of workspaceFolders) {
+    if (!folder) continue;
+    const abs = path.resolve(folder);
+    if (!isVfWorkspaceRoot(abs)) continue;
+    const real = realpathOr(abs);
+    if (seen.has(real)) continue;
+    seen.add(real);
+    out.push(abs);
+  }
+  out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return out;
+}
+
+/** 找出包含指定后端工程的 VotaForge 根（嵌套时取最深者）。 */
+export function findVfWorkspaceRoot(
+  projectRoot: string,
+  workspaceFolders: readonly string[],
+): string | undefined {
+  const realProject = realpathOr(path.resolve(projectRoot));
+  let best: string | undefined;
+  let bestLen = -1;
+  for (const vf of findVfWorkspaceRoots(workspaceFolders)) {
+    const realVf = realpathOr(vf);
+    if (!isInside(realVf, realProject)) continue;
+    if (realVf.length > bestLen) {
+      best = vf;
+      bestLen = realVf.length;
+    }
+  }
+  return best;
+}
+
 /** 把云端工程名转成安全的单层目录名。 */
 export function sanitizeProjectDirName(name: string): string {
   let s = (name ?? '').trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');

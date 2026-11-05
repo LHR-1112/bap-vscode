@@ -6,6 +6,8 @@ import {
   scanBackendProjectRoots,
   isBackendProjectRoot,
   isVfWorkspaceRoot,
+  findVfWorkspaceRoots,
+  findVfWorkspaceRoot,
   sanitizeProjectDirName,
   resolveDownloadTargetDir,
   directoryHasEntries,
@@ -119,6 +121,58 @@ describe('isVfWorkspaceRoot', () => {
     fs.rmSync(path.join(tmp, 'votaforge.workspace.json'));
     fs.mkdirSync(path.join(tmp, '.votaforge'));
     expect(isVfWorkspaceRoot(tmp)).toBe(true);
+  });
+});
+
+describe('findVfWorkspaceRoots', () => {
+  it('只返回 VotaForge 根，排序且忽略不存在的路径', () => {
+    const vfB = path.join(tmp, 'b-vf');
+    const vfA = path.join(tmp, 'a-vf');
+    const plain = path.join(tmp, 'plain');
+    fs.mkdirSync(path.join(vfB, '.votaforge'), { recursive: true });
+    fs.mkdirSync(vfA);
+    fs.writeFileSync(path.join(vfA, 'votaforge.workspace.json'), '{}');
+    fs.mkdirSync(plain);
+    const found = findVfWorkspaceRoots([
+      vfB,
+      plain,
+      vfA,
+      path.join(tmp, 'missing'),
+      vfA,
+    ]);
+    expect(found).toEqual([vfA, vfB].sort());
+  });
+
+  it('空列表 → 空数组', () => {
+    expect(findVfWorkspaceRoots([])).toEqual([]);
+  });
+});
+
+describe('findVfWorkspaceRoot', () => {
+  it('找出包含工程的最深 VotaForge 根', () => {
+    const outer = path.join(tmp, 'outer');
+    const inner = path.join(outer, 'inner');
+    const project = path.join(inner, 'p1');
+    fs.mkdirSync(path.join(outer, '.votaforge'), { recursive: true });
+    fs.mkdirSync(path.join(inner, '.votaforge'), { recursive: true });
+    mkProject(project);
+    expect(findVfWorkspaceRoot(project, [outer])).toBe(outer);
+    expect(findVfWorkspaceRoot(project, [outer, inner])).toBe(inner);
+  });
+
+  it('工程不在任何 vf 根内 → undefined', () => {
+    const vf = path.join(tmp, 'vf');
+    const project = path.join(tmp, 'other', 'p1');
+    fs.mkdirSync(path.join(vf, '.votaforge'), { recursive: true });
+    mkProject(project);
+    expect(findVfWorkspaceRoot(project, [vf])).toBeUndefined();
+  });
+
+  it('vf 根自身作为工程 → 返回该根', () => {
+    const vf = path.join(tmp, 'vf');
+    fs.mkdirSync(path.join(vf, '.votaforge'), { recursive: true });
+    mkProject(vf);
+    expect(findVfWorkspaceRoot(vf, [vf])).toBe(vf);
   });
 });
 

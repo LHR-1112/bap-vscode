@@ -10,6 +10,8 @@ import { parseQueryString, projectIdFromUriString } from '../history/history-uri
 
 export interface ProjectRequest {
   projectId?: string;
+  /** MCP `project` 参数：projectId / projectUuid / displayName。 */
+  projectRef?: string;
   sourceControl?: vscode.SourceControl;
   resourceGroup?: vscode.SourceControlResourceGroup;
   resourceUri?: vscode.Uri;
@@ -19,6 +21,7 @@ export interface ProjectRequest {
 
 export type ResolutionSource =
   | 'explicit-id'
+  | 'explicit-ref'
   | 'source-control'
   | 'resource-group'
   | 'path'
@@ -45,6 +48,8 @@ export interface ResolveOptions {
   allowActiveEditor?: boolean;
   /** 是否允许回退到「上次使用的工程」。默认 true。 */
   allowLastUsed?: boolean;
+  /** 歧义提示中使用 MCP 的 `project` 参数措辞（工具调用）。 */
+  suggestProjectParam?: boolean;
   /** QuickPick 提示语中的动作名。 */
   purpose?: string;
 }
@@ -215,7 +220,9 @@ export class BackendProjectRegistry {
     }
 
     throw new ProjectResolutionError(
-      `窗口内有 ${this.contexts.length} 个后端工程，无法确定目标工程；请从 SCM 资源或文件上操作`,
+      opts.suggestProjectParam
+        ? `窗口内有 ${this.contexts.length} 个后端工程，未指定目标工程；请传入 project（projectId / projectUuid / 工程名），或先调用 workspaceInfo 查询候选`
+        : `窗口内有 ${this.contexts.length} 个后端工程，无法确定目标工程；请从 SCM 资源或文件上操作`,
       'AMBIGUOUS',
       this.candidates(),
     );
@@ -345,7 +352,66 @@ export class BackendProjectRegistry {
   // ---- 内部 ----
 
   private candidates(): ProjectCandidate[] {
-    return this.contexts.map((c) => ({ projectId: c.projectId, displayName: c.displayName, root: c.root }));
+    return this.candidatesOf(this.contexts);
+  }
+
+  private candidatesOf(contexts: readonly BackendProjectContext[]): ProjectCandidate[] {
+    return contexts.map((c) => ({ projectId: c.projectId, displayName: c.displayName, root: c.root }));
+  }
+
+  /**
+   * 解析 MCP `project` 参数（P1-7）。优先级：projectId 精确 → projectUuid（忽略大小写）
+   * → displayName 精确 → displayName 忽略大小写。任一类别多命中即 AMBIGUOUS，
+   * 不降级到下一类别（避免把「uuid 重名」误判成工程名）。
+   */
+  private resolveRef(ref: string): ProjectResolution {
+    const key = ref.trim();
+    if (!key) {
+      throw new ProjectResolutionError(
+        'project 参数不能为空；可用 workspaceInfo 查询候选工程',
+        'INVALID_PROJECT',
+        this.candidates(),
+      );
+    }
+    const byId = this.getById(key);
+    if (byId) return { context: byId, source: 'explicit-ref', explicit: true };
+
+    const lower = key.toLowerCase();
+    const byUuid = this.contexts.filter(
+      (c) => (c.descriptor.projectUuid ?? '').toLowerCase() === lower,
+    );
+    const uuidHit = this.pickRefMatches(byUuid, key, 'projectUuid');
+    if (uuidHit) return uuidHit;
+
+    const byExactName = this.contexts.filter((c) => c.displayName === key);
+    const exactHit = this.pickRefMatches(byExactName, key, '工程名');
+    if (exactHit) return exactHit;
+
+    const byName = this.contexts.filter((c) => c.displayName.toLowerCase() === lower);
+    const nameHit = this.pickRefMatches(byName, key, '工程名（忽略大小写）');
+    if (nameHit) return nameHit;
+
+    throw new ProjectResolutionError(
+      `未知工程：${key}；project 可传 projectId、projectUuid 或工程名（可用 workspaceInfo 查询候选）`,
+      'UNKNOWN_PROJECT',
+      this.candidates(),
+    );
+  }
+
+  private pickRefMatches(
+    matches: readonly BackendProjectContext[],
+    key: string,
+    kind: string,
+  ): ProjectResolution | undefined {
+    if (matches.length === 0) return undefined;
+    if (matches.length === 1) {
+      return { context: matches[0], source: 'explicit-ref', explicit: true };
+    }
+    throw new ProjectResolutionError(
+      `project「${key}」按${kind}匹配到 ${matches.length} 个工程，无法确定目标；请改用 projectId`,
+      'AMBIGUOUS',
+      this.candidatesOf(matches),
+    );
   }
 
   private assertUsable(): void {
@@ -396,6 +462,7 @@ export class BackendProjectRegistry {
       }
       return { context: ctx, source: 'explicit-id', explicit: true };
     }
+    if (req.projectRef !== undefined) return this.resolveRef(req.projectRef);
     if (req.sourceControl) {
       const ctx = this.getBySourceControl(req.sourceControl);
       if (!ctx) {

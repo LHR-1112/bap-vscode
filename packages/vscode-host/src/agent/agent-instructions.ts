@@ -10,6 +10,19 @@ export interface AgentProjectInfo {
   jdkVersion?: string;
 }
 
+/** 多工程 / VotaForge 场景的附加生成上下文。 */
+export interface AgentGenerationContext {
+  currentProjectId?: string;
+  currentDisplayName?: string;
+  projectCount?: number;
+  /** 窗口内全部后端工程（current 标记当前正在写入的工程）。 */
+  siblings?: { projectId: string; displayName: string; root: string; current: boolean }[];
+  /** 当前工程所属的 VotaForge 根（若在 vf 工作区中）。 */
+  vfRoot?: string;
+  /** 安装后的 bap-vscode-mcp skill 路径（<vf根>/.votaforge/skill/bap-vscode-mcp）。 */
+  skillInstallPath?: string;
+}
+
 const DEFAULT_EXCLUDE_DIRS = new Set(['.git', '.bapdev-cli', '.opencode', 'node_modules', 'target', 'build']);
 const GPF_DC_PREFIX = 'gpf_dc_';
 
@@ -49,7 +62,10 @@ export function collectAgentProjectInfo(outputDir: string): AgentProjectInfo {
   };
 }
 
-export function buildAgentFileContent(info: AgentProjectInfo): string {
+export function buildAgentFileContent(
+  info: AgentProjectInfo,
+  ctx: AgentGenerationContext = {},
+): string {
   const jdk = info.jdkVersion ?? '1.8';
   const lines: string[] = [
     '# AI 协作指南',
@@ -64,8 +80,9 @@ export function buildAgentFileContent(info: AgentProjectInfo): string {
     '',
     '## 云工程能力（MCP 工具）',
     '',
-    '本插件通过 MCP server（id=`bap`）把云工程能力暴露为 AI 工具（严格映射：一 tool ↔ 一 `bapIde.*` 命令）：',
+    '本插件通过 MCP server（id=`bap`）把云工程能力暴露为 AI 工具（共 18 个；严格映射：一 tool ↔ 一 `bapIde.*` 命令）：',
     '',
+    '- `workspaceInfo` 工作区/工程概览（多工程时先调用，获取 `project` 可用值）',
     '- `refresh` 刷新（对比本地/云端）',
     '- `commit` 提交全部 / `commitFile` 提交单文件',
     '- `updateFile` 更新文件(回退云端) / `updateAll` 更新全部',
@@ -77,8 +94,41 @@ export function buildAgentFileContent(info: AgentProjectInfo): string {
     '- `redirect` 重定向 / `downloadProject` 下载工程',
     '- `listProjects` 项目列表 / `fetchCurrent` 取云端当前文件',
     '',
-    'MCP 已随 `Reset Agent Instructions` 配置到 Claude Code（工程根 `.mcp.json`）与 Codex（工程根 `.codex/config.toml`）；配置后重启对应客户端即可调用上述工具。',
+    '工程级工具均接受可选 `project` 参数（projectId / projectUuid / 工程名）。只有一个后端工程时可省略；',
+    '多工程省略会返回 `AMBIGUOUS` 并附候选工程——先调用 `workspaceInfo`，再显式传 `project`，不要盲目重试。',
     '',
+    '工程级工具成功时返回 `{ project: { projectId, displayName, root }, result }`；`workspaceInfo` /',
+    '`listProjects` / `downloadProject` 为工作区级工具，不包该结构。',
+    '',
+    'MCP 已随 `Reset Agent Instructions` 配置到 Claude Code（工程根 `.mcp.json`）与 Codex（工程根 `.codex/config.toml`）；配置后重启对应客户端即可调用上述工具。',
+    '注意：配置写在**当前后端工程根**。若 AI 客户端从 VotaForge 根启动，可能读取不到该配置——请在客户端项目根另行配置，或从后端工程根启动客户端。',
+    '',
+    '## 多工程与引导模式',
+    '',
+  ];
+
+  if (ctx.projectCount !== undefined) {
+    lines.push(`- 当前窗口共有 ${ctx.projectCount} 个后端工程。`);
+  }
+  lines.push(
+    '- 一个窗口可含 0..N 个后端工程；工程级工具通过 `project` 选择目标（projectId / projectUuid / 工程名）。',
+    '- 没有后端工程（无 `.develop`）时 MCP 处于**引导模式**，只暴露 `workspaceInfo` / `listProjects` / `downloadProject`。',
+    '  先 `downloadProject`，把下载目录加入工作区并重载窗口，其他工具才会出现（工具列表在 MCP 进程启动时固定）。',
+    '- 有工程但尚未加入工作区 / 尚未重载时，`workspaceInfo.mcp.reloadRequired` 为 true。',
+    '',
+  );
+
+  if (ctx.siblings && ctx.siblings.length > 0) {
+    lines.push('### 窗口内后端工程', '', '| 工程名 | projectId | 路径 |', '| --- | --- | --- |');
+    for (const s of ctx.siblings) {
+      const name = s.current ? `**${s.displayName}**（当前）` : s.displayName;
+      const esc = (v: string): string => v.replace(/\|/g, '\\|');
+      lines.push(`| ${esc(name)} | \`${esc(s.projectId)}\` | ${esc(s.root)} |`);
+    }
+    lines.push('');
+  }
+
+  lines.push(
     '## 核心约束',
     '',
     '- MUST 使用 Java 8 兼容语法与 API。',
@@ -99,7 +149,7 @@ export function buildAgentFileContent(info: AgentProjectInfo): string {
     '',
     '## 目录结构',
     '',
-  ];
+  );
 
   if (info.directories.length > 0) {
     for (const dir of info.directories) {
@@ -109,12 +159,27 @@ export function buildAgentFileContent(info: AgentProjectInfo): string {
     lines.push('- 未发现顶层源码目录（请人工确认）。');
   }
 
+  lines.push('', '## 技能入口', '');
+  if (ctx.skillInstallPath) {
+    lines.push(
+      `- 本插件 MCP 技能：\`bap-vscode-mcp\`，已安装到 \`${ctx.skillInstallPath}\`（说明如何调用上述 MCP 工具）。`,
+    );
+  } else if (ctx.vfRoot) {
+    lines.push(
+      '- 本插件 MCP 技能：`bap-vscode-mcp`（尚未安装）；在命令面板执行 `BAP: Install Skills`，会把随扩展打包的所有 skill 复制到 `<vf根>/.votaforge/skill/`。',
+    );
+  } else {
+    lines.push('- 本插件 MCP 技能：`bap-vscode-mcp`（`skill/bap-vscode-mcp`，说明如何调用上述 MCP 工具）。');
+  }
   lines.push(
-    '',
-    '## 技能入口',
-    '',
-    '- 本插件 MCP 技能：`bap-vscode-mcp`（`skill/bap-vscode-mcp`，说明如何调用上述 MCP 工具）',
     '- GPF 开发任务优先使用 `gpf-dev-orchestrator` 路由：规则函数 `gpf-rule-function`、HTTP 接口 `gpf-http-interface`、云 Cell `gpf-cloud-cell`、基础 API `gpf-api-call`。',
+  );
+  if (ctx.vfRoot) {
+    lines.push(
+      `- 本工程属于 VotaForge 工作区（根：\`${ctx.vfRoot}\`）：跨前后端 / 多工程的任务路由由**顶层 routing skill** 负责；本文件只描述 BAP 后端能力，不修改 \`votaforge.workspace.json\`。`,
+    );
+  }
+  lines.push(
     '',
     '## 构建与编译',
     '',
@@ -175,7 +240,7 @@ export function buildAgentFileContent(info: AgentProjectInfo): string {
     '',
     '## 云工程协作规范',
     '',
-    '- 首次操作：`BAP: Download Project`（MCP `downloadProject`）把工程拉到本地，连接配置写入 `.develop`。',
+    '- 首次操作：没有后端工程时，先 `BAP: Download Project`（MCP `downloadProject`）把工程拉到本地，连接配置写入 `.develop`；下载后加入工作区并重载，MCP 才从引导模式扩展为完整工具集。',
     '- 提交前先 `BAP: Refresh`（MCP `refresh`）看差异；提交用 `BAP: Commit`（`commit`）/ `BAP: Commit File`（`commitFile`）。',
     '- 查看云端当前代码用 `BAP: Fetch Current`（MCP `fetchCurrent`），勿用历史/下载代替。',
     '- 更新（回退云端）用 `BAP: Update File` / `BAP: Update All`（`updateFile`/`updateAll`），前先 `Refresh`，未知差异不要直接覆盖本地。',

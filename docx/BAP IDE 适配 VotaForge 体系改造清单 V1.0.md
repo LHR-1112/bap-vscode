@@ -3,7 +3,7 @@
 > 日期：2026-11-05
 > 依据：`docx/architecture/` 下 7 篇体系文档（plugin-split、workspace-protocol、votaforge-bap/lite/frontend/modeling/layout-designer）
 > 范围：本仓库 `apps/vscode` + `packages/vscode-host` + `packages/sdk`
-> 状态：**M1 实施完成**（本文件随实施更新）
+> 状态：**M2 实施完成**（本文件随实施更新）
 
 ## 一、结论
 
@@ -23,7 +23,7 @@
 | 2 | 是否读 `votaforge.workspace.json` 的 `capabilities.backend` | **暂时不读**。BAP 只用 `.develop` 标记发现；不把 workspace.json 作为激活前提。 |
 | 3 | 多后端 SCM 形态 | **每工程一个 provider**：id `bap:<projectId>`，label 带工程名，rootUri 为后端工程根。 |
 | 4 | Skill 安装位置 | **`<vf根>/.votaforge/skill/`**。注意后续可能增加多个 skill，安装器按目录整体复制、可枚举，不写死单个 skill 名。 |
-| 5 | 无 `.develop` 时 MCP | **启动但只暴露引导工具**（`workspaceInfo` / `listProjects` / `downloadProject`），检出 `.develop` 后扩展为完整工具集。 |
+| 5 | 无 `.develop` 时 MCP | **启动但只暴露引导工具**（`workspaceInfo` / `listProjects` / `downloadProject`），检出 `.develop` 后扩展为完整工具集。M2 落地为：仅当窗口至少打开一个 workspace folder 时启动；完全无文件夹不启动。 |
 | 6 | `.develop` 明文 Password | **本次不动**。`.develop` 是 BAP 自有协议常量，改格式会波及 Java 桥与 bapdev-cli；另立 SecretStorage 双读/版本化项目。 |
 | 7 | MCP `pwd` 参数 | **降为可选 legacy**，宿主从已保存连接/SecretStorage 解析；旧参数继续可用。 |
 
@@ -38,7 +38,7 @@
 | 不复用 GPF Token/账号做 BAP RPC | 不同服务器/协议/鉴权 |
 | 不新建 BAP CLI | `votaforge-bap.md`「不强行再造」 |
 | 不做跨插件运行时依赖；不改 `.develop` 名称/位置/语义 | 外部插件、独立发版 |
-| 不改 17 个 MCP 工具名与既有参数（只做增量） | MCP schema 是机器接口 |
+| 不改既有 MCP 工具名与既有参数（只做增量；M2 新增 `workspaceInfo` 与可选 `project`） | MCP schema 是机器接口 |
 | 不把自动安装的 skill 目录当工程存在/变更信号 | workspace-protocol §8.2 刻意排除 |
 | 不改 publisher/name/displayName/扩展 ID | 独立发版；品牌对齐另议 |
 
@@ -289,10 +289,89 @@
 - **工程失效**：`.develop` 被删除/改写后，写操作返回 `PROJECT_STALE`；重定向成功后自动采用新身份并刷新 SCM。
 - **MCP**：工具列表与参数不变；多工程下的工程选择在 M2（P1-7）加入 `project` 参数前，按活动编辑器/最近使用工程解析。
 
-### 7.5 已知边界（M2 处理）
+### 7.5 已知边界（M2 前，已在 §八 处理）
 
 - P1-7 ~ P1-12 未实施：MCP 工具尚无 `project` 参数与 `workspaceInfo`；无 `.develop` 时 MCP 仍不启动（决策 5 待 P1-8）。
 - Skill 尚未随 VSIX 分发，安装器与文档单工程假设待 P1-11 / P1-12。
 - 多根工作区的下载默认目标仍取第一个 workspace folder（M0 遗留），交互路径可由 `targetDir` 覆盖。
 - 工作区 folder 增删目前只提示重载窗口，未做增量 attach/detach（P2-2）。
 - `.develop` 明文 Password 与 MCP `pwd` 必填保持不变（决策 6/7，P2-4）。
+
+## 八、M2 实施记录
+
+> M2 范围：P1-7 ~ P1-12（AI 编排链、引导模式、Agent 配置安全写入、skill 分发/安装、文档去单工程假设）。版本 `1.0.5`。
+
+### 8.1 完成项
+
+- [x] P1-7 MCP 工具增加工程维度：15 个工程级工具可选 `project`，新增只读 `workspaceInfo`（第 18 个工具），结果包 `{ project, result }`
+- [x] P1-8 无 `.develop` 的 vf 窗口：MCP 以 bootstrap 模式启动，只暴露 `workspaceInfo` / `listProjects` / `downloadProject`；宿主调用侧二次校验
+- [x] P1-9 Agent 指令与 MCP 配置写到后端工程根：`CLAUDE.md` / `AGENTS.md` 标记段合并；损坏 `.mcp.json` 跳过并警告，不重建
+- [x] P1-10 重定向历史位置：M1 已落在工程根 `.bap/relocate-history.json`；按用户决策保持现状（不加 0600、不做迁移）
+- [x] P1-11 领域 skill 纳入 VSIX：`stage-skills.js` 打包全部 skill；`BAP: Install Skills` 枚举安装到 `<vf根>/.votaforge/skill/`，覆盖前模态确认
+- [x] P1-12 README / SKILL / references / 生成指令去掉单工程假设；根 README 与 `apps/vscode/README.md` 同步
+- [x] typecheck / 单测（25 文件 213 例）/ compile / build 通过
+
+### 8.2 关键设计
+
+- **project 解析优先级**：projectId 精确 → projectUuid（忽略大小写）→ displayName 精确 → displayName 忽略大小写；任一类别多命中即 `AMBIGUOUS`，只返回该类别候选，不降级到下一类别。空值 → `INVALID_PROJECT`，无命中 → `UNKNOWN_PROJECT`。
+- **不回退**：MCP 工具调用不带 `project` 时，不做活动编辑器 / 上次使用回退。0 个工程 → `NO_PROJECTS`；1 个 → 直接使用；多个 → `AMBIGUOUS` + 候选 + `suggestProjectParam` 提示。
+- **结果 envelope**：工程级工具统一 `{ project: { projectId, displayName, root }, result }`（`undefined` → `null`）；工作区级工具原样返回。`project` 参数不进入 `execTool` 业务参数，但保留在 `toArgs` 中交给命令路由；内部路由键 `__project*` 等仍被清洗。
+- **引导模式**：`shouldStartMcp(folderCount>0)` 控制是否启动；`computeMcpMode(registered>0 && live>0 ? full : bootstrap)` 计算实时模式。模式按**每条 IPC 连接（每个 MCP 进程）首次 listTools/invoke 时固定**，不依赖 VS Code 的 `resolveMcpServerDefinition`（外部 Claude Code / Codex 不经过该钩子）；`effectiveMcpMode` 只在工程集合消失时允许降级。`.develop` watcher 比较实时工程集合，变化时提示重载窗口。mcp-server 在 IPC 断开（窗口重载）后自动重连、重读 `~/.bap/mcp-ipc`、重拉工具列表，并通过 `notifications/tools/list_changed` 通知外部客户端刷新。
+- **bootstrap `listProjects`**：无 `.develop` 时必须同时提供 `uri/user/pwd`，用一次性 RPC 直连 `getAllProjects` 后立即关闭；有工程时复用注册表连接（允许活动编辑器 / 上次使用回退）。
+- **workspaceInfo**：数据仅来自扫描描述符与注册表；`serverUri` 去掉 userinfo（正常 URI 只在 authority 段剥离，保留 path/query 中的 `@`；畸形 URI 兜底删除到最后一个 `@`，异常输入也不泄漏凭据）；输出不含 `pwd`/`Password`/`user`。MCP 调用时由宿主注入调用方进程实际生效的 `mode`；该模式与窗口推断不一致、`registered:false` 或注册表有而实时扫描无 → `reloadRequired:true`。
+- **Agent 配置**：`mergeMarkedSection` 只替换 BAP 标记段，保留用户内容、重复段合并、CRLF/BOM 保持、幂等；`mergeMcpJson` 对非法 JSON / 非对象根 / 非对象 `mcpServers` 返回 `ok:false`，调用方跳过写入；Codex TOML 读写异常降级为警告。
+- **skill 安装**：枚举含 `SKILL.md` 的直接子目录（不写死名称）；目标必须是已存在的 VF 根（不创建 `.votaforge`）；同父临时目录 + 备份 rename 原子替换；跳过符号链接与 `.DS_Store` 等，并拒绝 `.votaforge` / `.votaforge/skill` 父级为符号链接（防止写到 VF 根之外）；仅在显式命令时执行。
+- **IPC 错误协议**：宿主把异常规范化为 `{ message, code?, candidates? }`；子进程还原为 `IpcToolCallError`，文本附候选清单与 `BAP_MCP_ERROR_META`。超时按工具分级：下载/发布/单测 30 分钟，编译/依赖 10 分钟，重定向/列表/提交/更新全部 5 分钟，其余 30 秒。
+- **IPC 端点安全删除**：宿主退出时仅当 `~/.bap/mcp-ipc` 内容仍等于本窗口 endpoint 才删除，避免误删其它窗口文件。
+
+### 8.3 新增 / 修改文件
+
+| 文件 | 变更 |
+| --- | --- |
+| `packages/vscode-host/src/mcp/mode.ts` | 新增：启动门禁与 full/bootstrap 模式计算 |
+| `packages/vscode-host/src/mcp/ipc-protocol.ts` | 新增：结构化 IPC 错误、候选清洗、`BAP_MCP_ERROR_META`、按工具超时 |
+| `packages/vscode-host/src/mcp/tools.ts` | 新增 `workspaceInfo`；15 个工程级工具加可选 `project`；导出模式裁剪与工具分类 |
+| `packages/vscode-host/src/mcp/tool-exec.ts` | `isToolCall` 收紧；新增 `ProjectToolEnvelope` / `wrapProjectResult` |
+| `packages/vscode-host/src/mcp/host.ts` | 启动门禁、模式裁剪、调用侧模式校验、结构化错误、`.develop` 监听提示重载、安全删除端点 |
+| `packages/vscode-host/src/mcp/mcp-server.ts` | 解析结构化错误、按工具超时、断线自动重连并刷新工具列表（`tools/list_changed`）、版本 1.0.5 |
+| `packages/vscode-host/src/projects/project-errors.ts` | 新增 `INVALID_PROJECT` |
+| `packages/vscode-host/src/projects/project-registry.ts` | `projectRef` 解析（id/uuid/name）、`suggestProjectParam`、显式 ref 源 |
+| `packages/vscode-host/src/projects/workspace-info.ts` | 新增：workspaceInfo 数据构建与 URI 去凭据 |
+| `packages/vscode-host/src/projects/server-probe.ts` | 新增：bootstrap 直连探测服务器工程列表 |
+| `packages/vscode-host/src/backend-projects.ts` | 新增 `findVfWorkspaceRoots` / `findVfWorkspaceRoot` |
+| `packages/vscode-host/src/agent/markdown-merge.ts` | 新增：CLAUDE.md/AGENTS.md 标记段合并 |
+| `packages/vscode-host/src/agent/mcp-config.ts` | `mergeMcpJson` 返回 `MergeMcpJsonResult`，损坏文件拒绝重建 |
+| `packages/vscode-host/src/agent/agent-instructions.ts` | 生成上下文（兄弟工程/vf 根/skill 路径）；18 工具、project、bootstrap、envelope、routing 声明 |
+| `packages/vscode-host/src/skill/skill-installer.ts` | 新增：skill 枚举、VF 根校验、原子安装/覆盖 |
+| `packages/vscode-host/src/commands/command-router.ts` | 工具 `project` 路由与 envelope；`workspaceInfo` 命令；bootstrap `listProjects`；Agent 指令合并与警告汇总 |
+| `packages/vscode-host/src/projects/activate.ts` | 传入 `launch` |
+| `packages/vscode-host/src/activate.ts` | legacy：适配 `mergeMcpJson` 返回值 |
+| `packages/vscode-host/src/index.ts` | 导出新模块与类型 |
+| `apps/vscode/src/extension.ts` | 激活后注册 MCP（带工程数）；`bapIde.installSkills`；下载成功提示重载 |
+| `apps/vscode/package.json` | 新增 `bapIde.installSkills`；版本 1.0.5；build 接入 stage-skills |
+| `apps/vscode/scripts/stage-skills.js` | 新增：打包全部 skill 到 `assets/skill/` |
+| `apps/vscode/.vscodeignore` | 排除 `scripts/**`，保留 `assets/**` |
+| `packages/core/src/index.ts` | `BAP_IDE_VERSION` → 1.0.5 |
+| `README.md` / `apps/vscode/README.md` | 18 工具、project/envelope/bootstrap、skill 安装、vf routing、projectId 哈希说明；两份同步 |
+| `CHANGELOG.md` / `apps/vscode/CHANGELOG.md` | 1.0.5（并同步 1.0.4） |
+| `skill/bap-vscode-mcp/**` | SKILL / commands / 17 份工具文档更新 + 新增 `workspaceInfo.md` |
+| `packages/vscode-host/test/mcp-*.test.ts` / `ipc-protocol.test.ts` / `workspace-info.test.ts` / `markdown-merge.test.ts` / `agent-instructions.test.ts` / `skill-installer.test.ts` / `server-probe.test.ts` / `project-registry.test.ts` / `backend-projects.test.ts` / `mcp-config.test.ts` | 新增/扩展单测 |
+
+### 8.4 行为速查
+
+- **无文件夹窗口**：不启动 MCP（`resolve` 返回 undefined）。
+- **有文件夹、无 `.develop`**：bootstrap；`workspaceInfo` 返回空工程；`commit` 等返回 `BOOTSTRAP_MODE`；`listProjects` 需显式 `uri/user/pwd`；`downloadProject` 可用。
+- **单工程**：省略 `project` 直接执行，结果带 envelope。
+- **多工程**：省略 `project` → `AMBIGUOUS` + 候选；按 projectId / projectUuid（忽略大小写）/ 工程名指定均可用；同一 uuid 多份检出时按 uuid 解析为歧义，改用 projectId。
+- **下载/检出 `.develop` 后**：提示重载窗口；重载后 MCP 从 bootstrap 扩展为 18 个工具；外部客户端自动重连并刷新工具列表。
+- **Agent 指令**：已有用户内容保留；重复 BAP 段合并；损坏 `.mcp.json` 原样保留并警告。
+- **Install Skills**：仅 VF 根可装；枚举全部 skill；二次安装模态确认后覆盖；符号链接跳过。
+
+### 8.5 已知边界（不在 M2 范围）
+
+- P2-1 IPC 端点仍为全局 `~/.bap/mcp-ipc`（M2 仅做安全删除 + 文档提示多窗口限制）。
+- P2-2 workspace folder 增删仍提示重载，未做增量 attach/detach。
+- P2-4 MCP `pwd` 仍为必填；`.develop` 明文 Password 不变（决策 6/7）。
+- P2-6 版本源未统一；M2 手动同步 `package.json` / `BAP_IDE_VERSION` / `mcp-server` 三处。
+- P1-10 的 0600 权限与历史迁移按用户决策保持现状。
+- 多根工作区下载默认目标仍取第一个 workspace folder（可被 `targetDir` 覆盖）。

@@ -2,7 +2,7 @@
   "name": "bap-ide-vscode",
   "displayName": "BAP IDE",
   "description": "面向 BAP 云工程的 VS Code 插件",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "publisher": "bap",
   "license": "MIT",
   "repository": {
@@ -166,6 +166,11 @@
       {
         "command": "bapIde.resetAgentInstructions",
         "title": "Reset Agent Instructions",
+        "category": "BAP"
+      },
+      {
+        "command": "bapIde.installSkills",
+        "title": "Install Skills",
         "category": "BAP"
       }
     ],
@@ -375,7 +380,7 @@
   "scripts": {
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
-    "build": "npm run build:bridge && node scripts/stage-bridge.js && node esbuild.js --production",
+    "build": "npm run build:bridge && node scripts/stage-bridge.js && node scripts/stage-skills.js && node esbuild.js --production",
     "build:bridge": "npm run build -w @bap/java-bridge",
     "vscode:prepublish": "npm run build",
     "package": "vsce package --no-dependencies"

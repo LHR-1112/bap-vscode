@@ -4,6 +4,18 @@
 
 const MCP_SERVER_NAME = 'bap';
 
+export type MergeMcpJsonResult =
+  | { ok: true; content: string; action: 'created' | 'merged' }
+  | {
+      ok: false;
+      reason: 'invalid-json' | 'not-object' | 'invalid-mcpServers' | 'read-error';
+      message: string;
+    };
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  return !!x && typeof x === 'object' && !Array.isArray(x);
+}
+
 /** 生成 Claude Code 的 bap server 条目。 */
 function mcpJsonEntry(mcpServerPath: string): Record<string, unknown> {
   return { command: 'node', args: [mcpServerPath] };
@@ -11,22 +23,49 @@ function mcpJsonEntry(mcpServerPath: string): Record<string, unknown> {
 
 /**
  * 合并写入 .mcp.json：保留已有其它 mcpServers，仅更新/插入 bap。
+ * 损坏的 JSON / 非对象根 / 非对象 mcpServers 一律报错，**绝不重建**（避免丢失用户配置）。
  * @param existing 现有文件内容（无文件传 undefined）
  */
-export function mergeMcpJson(existing: string | undefined, mcpServerPath: string): string {
+export function mergeMcpJson(existing: string | undefined, mcpServerPath: string): MergeMcpJsonResult {
+  const hasExisting = !!existing && !!existing.trim();
   let root: Record<string, unknown> = {};
-  if (existing && existing.trim()) {
+  if (hasExisting) {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(existing) as Record<string, unknown>;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) root = parsed;
+      parsed = JSON.parse(existing!);
     } catch {
-      // 损坏的 JSON：重建（丢失原有内容，但保证可写）
+      return {
+        ok: false,
+        reason: 'invalid-json',
+        message: '.mcp.json 不是合法 JSON，已跳过写入（不会重建或覆盖原文件）',
+      };
     }
+    if (!isPlainObject(parsed)) {
+      return {
+        ok: false,
+        reason: 'not-object',
+        message: '.mcp.json 的根不是 JSON 对象，已跳过写入',
+      };
+    }
+    root = parsed;
   }
-  const servers = (root.mcpServers ?? {}) as Record<string, unknown>;
+
+  const current = root.mcpServers;
+  if (current !== undefined && !isPlainObject(current)) {
+    return {
+      ok: false,
+      reason: 'invalid-mcpServers',
+      message: '.mcp.json 的 mcpServers 不是对象，已跳过写入',
+    };
+  }
+  const servers = current ?? {};
   servers[MCP_SERVER_NAME] = mcpJsonEntry(mcpServerPath);
   root.mcpServers = servers;
-  return JSON.stringify(root, null, 2) + '\n';
+  return {
+    ok: true,
+    content: JSON.stringify(root, null, 2) + '\n',
+    action: hasExisting ? 'merged' : 'created',
+  };
 }
 
 /** 生成 Codex 的 [mcp_servers.bap] TOML 块。 */

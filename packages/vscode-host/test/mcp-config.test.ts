@@ -7,27 +7,63 @@ const PATH = '/ext/dist/mcp-server.js';
 describe('mergeMcpJson', () => {
   it('无现有文件：生成仅含 bap 的配置', () => {
     const out = mergeMcpJson(undefined, PATH);
-    const j = JSON.parse(out);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error(out.message);
+    expect(out.action).toBe('created');
+    const j = JSON.parse(out.content);
     expect(j.mcpServers).toEqual({ bap: { command: 'node', args: [PATH] } });
   });
 
   it('已有其它 server：保留并插入 bap', () => {
     const existing = JSON.stringify({ mcpServers: { other: { command: 'npx', args: ['x'] } } });
-    const j = JSON.parse(mergeMcpJson(existing, PATH));
+    const out = mergeMcpJson(existing, PATH);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error(out.message);
+    expect(out.action).toBe('merged');
+    const j = JSON.parse(out.content);
     expect(j.mcpServers.other).toEqual({ command: 'npx', args: ['x'] });
     expect(j.mcpServers.bap).toEqual({ command: 'node', args: [PATH] });
   });
 
   it('已有 bap：更新而不重复', () => {
     const existing = JSON.stringify({ mcpServers: { bap: { command: 'old', args: [] } } });
-    const j = JSON.parse(mergeMcpJson(existing, PATH));
+    const out = mergeMcpJson(existing, PATH);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error(out.message);
+    const j = JSON.parse(out.content);
     expect(Object.keys(j.mcpServers)).toEqual(['bap']);
     expect(j.mcpServers.bap.args).toEqual([PATH]);
   });
 
-  it('损坏的 JSON：重建', () => {
-    const j = JSON.parse(mergeMcpJson('not json {{{', PATH));
+  it('根上的其它字段保留', () => {
+    const out = mergeMcpJson(JSON.stringify({ project: 'left' }), PATH);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error(out.message);
+    const j = JSON.parse(out.content);
+    expect(j.project).toBe('left');
     expect(j.mcpServers.bap.command).toBe('node');
+  });
+
+  it('损坏的 JSON：拒绝写入（绝不重建）', () => {
+    const out = mergeMcpJson('not json {{{', PATH);
+    expect(out).toMatchObject({ ok: false, reason: 'invalid-json' });
+    expect(out).not.toHaveProperty('content');
+  });
+
+  it('根不是对象：拒绝写入', () => {
+    expect(mergeMcpJson('[]', PATH)).toMatchObject({ ok: false, reason: 'not-object' });
+    expect(mergeMcpJson('"x"', PATH)).toMatchObject({ ok: false, reason: 'not-object' });
+  });
+
+  it('mcpServers 不是对象：拒绝写入', () => {
+    expect(mergeMcpJson(JSON.stringify({ mcpServers: [] }), PATH)).toMatchObject({
+      ok: false,
+      reason: 'invalid-mcpServers',
+    });
+  });
+
+  it('空白文件视为新建', () => {
+    expect(mergeMcpJson('  \n', PATH)).toMatchObject({ ok: true, action: 'created' });
   });
 });
 

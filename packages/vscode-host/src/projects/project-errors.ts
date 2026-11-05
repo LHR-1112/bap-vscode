@@ -3,6 +3,7 @@ export type ProjectResolutionCode =
   | 'NO_PROJECTS'
   | 'AMBIGUOUS'
   | 'UNKNOWN_PROJECT'
+  | 'INVALID_PROJECT'
   | 'OUTSIDE_PROJECT'
   | 'PROJECT_STALE'
   | 'DUPLICATE_CHECKOUT'
