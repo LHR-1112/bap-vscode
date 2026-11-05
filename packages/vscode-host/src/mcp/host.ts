@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { BAP_TOOLS, type IpTool } from './tools';
+import { discoverBackendProjects } from '../backend-projects-vscode';
 
 export const MCP_SERVER_ID = 'bap';
 
@@ -83,11 +84,11 @@ export function registerMcpServerProvider(
 
       const provider: vscode.McpServerDefinitionProvider = {
         provideMcpServerDefinitions: () => [serverDef],
-        // 登录钩子：无 BAP 工程（无 .develop 工作区）则中止启动。
+        // 登录钩子：窗口内没有任何 .develop（含 vf 工作区子目录）则中止启动。
+        // 工程根按标记扫描发现，不假设 workspaceFolders[0] 就是后端工程。
         resolveMcpServerDefinition: async (s) => {
-          const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          if (!root || !fs.existsSync(path.join(root, '.develop'))) {
-            log.debug('[mcp] 无 .develop，跳过 MCP server 启动');
+          if (discoverBackendProjects().length === 0) {
+            log.debug('[mcp] 未发现 .develop，跳过 MCP server 启动');
             return undefined;
           }
           return s;

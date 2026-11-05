@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { BAP_IDE_NAME, BAP_IDE_VERSION } from '@bap/core';
 import { createRpcClient, type BridgeLaunchConfig } from '@bap/rpc';
 import { createBapSdk, downloadProject, detectJdk8, writeJavaSettings, type CJavaProjectDto } from '@bap/sdk';
-import { activateScm, checkLatestRelease, isNewer, DEFAULT_FEED, registerMcpServerProvider, isToolCall } from '@bap/vscode-host';
+import { activateScm, checkLatestRelease, isNewer, DEFAULT_FEED, registerMcpServerProvider, isToolCall, discoverBackendProjects, isVfWorkspaceRoot, sanitizeProjectDirName, resolveDownloadTargetDir, directoryHasEntries } from '@bap/vscode-host';
 
 export function activate(context: vscode.ExtensionContext): void {
   // BAP IDE 输出通道：所有诊断日志写到「输出 → BAP IDE」，便于排查激活/命令/连接问题。
@@ -69,6 +69,29 @@ export function activate(context: vscode.ExtensionContext): void {
     mainClass: 'com.bap.dev.BridgeMain',
   };
 
+  /** 下载/重定位后写 Java 配置用的 JDK 路径：设置优先，其次自动探测。 */
+  const resolveJdk = (): string | undefined => {
+    const configured = vscode.workspace.getConfiguration('bapIde').get<string>('java8Path');
+    return configured && configured.trim() ? configured.trim() : detectJdk8();
+  };
+
+  /** 写 .vscode/settings.json 并记录结果（下载路径共用；quiet 用于 MCP 非交互路径）。 */
+  const applyJavaSettings = (destDir: string, opts: { quiet?: boolean } = {}): void => {
+    const jdk = resolveJdk();
+    const result = writeJavaSettings(destDir, jdk);
+    log.appendLine(
+      result === 'skipped'
+        ? '[downloadProject] .vscode/settings.json 已存在但无法解析（可能含注释），为避免覆盖已跳过写入'
+        : `[downloadProject] .vscode/settings.json ${result === 'merged' ? '已合并写入（保留了原有设置）' : '已新建'}`,
+    );
+    if (result === 'skipped' && !opts.quiet) {
+      void vscode.window.showWarningMessage(
+        'BAP: 目标目录已有 .vscode/settings.json 但无法解析（可能含注释），为免覆盖已跳过写入 BAP 推荐设置。',
+      );
+    }
+    if (!jdk && !opts.quiet) void vscode.window.showWarningMessage('BAP: 未检测到 JDK 1.8，已写入 JavaSE-1.8 配置，请在插件设置中填 bapIde.java8Path 或手动补 path');
+  };
+
   // 下载工程：命令行入口（不依赖当前打开的工作区）。流式下载 + 解压 + 写 .develop（Java 桥完成），
   // 再写 .vscode/settings.json（JDK1.8），最后替换窗口打开。
   context.subscriptions.push(
@@ -81,16 +104,38 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           const rpc = createRpcClient({ launch });
           try {
+            // 目录名：显式 projectName > 登录后按 uuid 反查 > uuid 兜底。
+            let projectName = typeof t.projectName === 'string' ? t.projectName : '';
+            if (!projectName) {
+              try {
+                await rpc.connect(t.uri as string, t.user as string, t.pwd as string);
+                const projects = (await rpc.call('getAllProjects')) as CJavaProjectDto[];
+                projectName = projects.find((p) => p.uuid === t.projectUuid)?.name ?? '';
+              } catch {
+                /* 反查失败不阻塞下载 */
+              }
+            }
+            const destDir = resolveDownloadTargetDir(
+              root,
+              projectName || String(t.projectUuid),
+              typeof t.targetDir === 'string' ? t.targetDir : undefined,
+            );
+            // 独立工作区沿用「下载到根目录」；vf 工作区默认落到工程子目录，非空则拒绝覆盖。
+            if (destDir !== root && directoryHasEntries(destDir)) {
+              return { error: `目标目录已存在且非空：${destDir}` };
+            }
+            fs.mkdirSync(destDir, { recursive: true });
             await downloadProject({
               rpc,
               uri: t.uri as string,
               user: t.user as string,
               pwd: t.pwd as string,
               projectUuid: t.projectUuid as string,
-              destDir: root,
+              destDir,
               onLog: (m) => log.appendLine(`[downloadProject] ${m}`),
             });
-            return `已下载到 ${root}`;
+            applyJavaSettings(destDir, { quiet: true });
+            return `已下载到 ${destDir}`;
           } finally {
             await rpc.close();
           }
@@ -137,7 +182,36 @@ export function activate(context: vscode.ExtensionContext): void {
             void vscode.window.showWarningMessage('BAP: 请先打开一个文件夹，再下载工程');
             return;
           }
-          const destDir = root; // 直接下载到 VS Code 项目根目录，不再建工程名子目录
+          // 独立 BAP 工作区：仍下载到工作区根；VotaForge 工作区：默认落到 <根>/<工程名>，允许改子目录。
+          let destDir = root;
+          if (isVfWorkspaceRoot(root)) {
+            const input = await vscode.window.showInputBox({
+              prompt: '下载到工作区内的子目录（相对工作区根）',
+              value: sanitizeProjectDirName(picked.label),
+              ignoreFocusOut: true,
+              validateInput: (v) => {
+                const s = v?.trim();
+                if (!s) return '必填（相对工作区根的路径）';
+                try {
+                  resolveDownloadTargetDir(root, picked.label, s);
+                  return undefined;
+                } catch (e) {
+                  return e instanceof Error ? e.message : String(e);
+                }
+              },
+            });
+            if (!input) return;
+            destDir = resolveDownloadTargetDir(root, picked.label, input);
+          }
+          if (destDir !== root && directoryHasEntries(destDir)) {
+            const ok = await vscode.window.showWarningMessage(
+              `目录已存在且非空：${destDir}`,
+              { modal: true },
+              '继续下载',
+            );
+            if (ok !== '继续下载') return;
+          }
+          fs.mkdirSync(destDir, { recursive: true });
           let last = 0;
           await vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: `下载工程 ${picked.label}`, cancellable: true },
@@ -164,21 +238,26 @@ export function activate(context: vscode.ExtensionContext): void {
             },
           );
           log.appendLine('[downloadProject] 下载完成，写 .vscode/settings.json');
-          const configured = vscode.workspace.getConfiguration('bapIde').get<string>('java8Path');
-          const jdk = configured && configured.trim() ? configured.trim() : detectJdk8();
-          const settingsResult = writeJavaSettings(destDir, jdk);
-          log.appendLine(
-            settingsResult === 'skipped'
-              ? '[downloadProject] .vscode/settings.json 已存在但无法解析（可能含注释），为避免覆盖已跳过写入'
-              : `[downloadProject] .vscode/settings.json ${settingsResult === 'merged' ? '已合并写入（保留了原有设置）' : '已新建'}`,
-          );
-          if (settingsResult === 'skipped') {
-            void vscode.window.showWarningMessage(
-              'BAP: 目标目录已有 .vscode/settings.json 但无法解析（可能含注释），为免覆盖已跳过写入 BAP 推荐设置。',
+          applyJavaSettings(destDir);
+          if (isVfWorkspaceRoot(root)) {
+            // vf 容器工作区：不能替换窗口（会丢掉 vf 根），提示加入工作区后重载。
+            const rel = path.relative(root, destDir).split(path.sep).join('/') || '.';
+            const action = await vscode.window.showInformationMessage(
+              `BAP 工程已下载到 ${rel}`,
+              '添加到工作区并重新加载',
+              '稍后',
             );
+            if (action === '添加到工作区并重新加载') {
+              const folders = vscode.workspace.workspaceFolders ?? [];
+              vscode.workspace.updateWorkspaceFolders(folders.length, 0, {
+                uri: vscode.Uri.file(destDir),
+                name: picked.label,
+              });
+              await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
+          } else {
+            await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), false);
           }
-          if (!jdk) void vscode.window.showWarningMessage('BAP: 未检测到 JDK 1.8，已写入 JavaSE-1.8 配置，请在插件设置中填 bapIde.java8Path 或手动补 path');
-          await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), false);
           log.appendLine(`[downloadProject] 完成，destDir=${destDir}`);
         } finally {
           await rpc.close();
@@ -192,20 +271,26 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   try {
-    // 无打开的 workspace folder -> 无法定位 BAP 工程根，SCM 不启用
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!root) {
+    // 无打开的 workspace folder -> 无法扫描后端工程根，SCM 不启用
+    if (!vscode.workspace.workspaceFolders?.length) {
       log.appendLine('[activate] 无 workspace folder，跳过 SCM');
       void vscode.window.showWarningMessage('BAP: 请先打开一个含 .develop 的 BAP 工程文件夹');
       return;
     }
-    log.appendLine(`[activate] workspaceRoot = ${root}`);
 
-    // 仅当根目录含 .develop 才启用 SCM 存储库（否则视为非 BAP 工程，不显示 Source Control）
-    if (!fs.existsSync(path.join(root, '.develop'))) {
-      log.appendLine('[activate] 根目录无 .develop，跳过 SCM 存储库');
+    // 后端工程根 = 含 .develop 的目录（可能在 vf 工作区的子目录里），不再假设 workspaceFolders[0]。
+    const backendProjects = discoverBackendProjects();
+    if (backendProjects.length === 0) {
+      log.appendLine('[activate] 未发现 .develop，跳过 SCM 存储库');
       return;
     }
+    if (backendProjects.length > 1) {
+      log.appendLine(
+        `[activate] 发现 ${backendProjects.length} 个后端工程，M1 前暂使用第一个：${backendProjects[0].root}`,
+      );
+    }
+    const root = backendProjects[0].root;
+    log.appendLine(`[activate] backendProjectRoot = ${root}（${backendProjects[0].relativePath}）`);
 
     // Java 桥子进程：用扩展内捆绑的 bridge jar 资产
     log.appendLine(`[activate] launch bridge, classpath=${launch.classpath[0]}`);

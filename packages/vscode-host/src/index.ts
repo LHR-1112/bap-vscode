@@ -20,6 +20,20 @@ export {
 } from './scm/types';
 export type { FileDecoSpec, ScmDecoSpec } from './scm/types';
 
+export {
+  DEVELOP_MARKER,
+  VF_WORKSPACE_FILE,
+  VF_DIR,
+  scanBackendProjectRoots,
+  isBackendProjectRoot,
+  isVfWorkspaceRoot,
+  sanitizeProjectDirName,
+  resolveDownloadTargetDir,
+  directoryHasEntries,
+} from './backend-projects';
+export type { BackendProjectRoot, ScanOptions } from './backend-projects';
+export { discoverBackendProjects } from './backend-projects-vscode';
+
 export { registerHistoryContentProvider } from './history/history-provider';
 export { openHistoryView, openHistoryDiff } from './history/history-view';
 export { checkLatestRelease, isNewer, DEFAULT_FEED } from './update-check';

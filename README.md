@@ -8,7 +8,7 @@
 - **源代码管理（SCM）**：云端为基线，分组「新增/更改/删除」；刷新、提交（全部/单个/分组）、发布插件（全量）、更新（全部/单个/分组）、打开 Diff / 文件；文件项右键菜单（打开文件/更新/提交/编译/调试/单测）。
 - **查看历史**：项目历史 / 文件历史——编辑器标签页 Webview（Lit），复刻 git view history；选中版本可回看前一版本 diff。
 - **重定向工程**：切换 BAP Server（ws 地址 + 账号 + 密码），带本地历史（`<工程>/.bap/relocate-history.json`），可一键/编辑/新增。
-- **下载工程**：从命令行按流式方式下载整包到当前工作区根，解压、写 `.develop`、写 `.vscode/settings.json`（JDK8），替换窗口打开。
+- **下载工程**：从命令行按流式方式下载整包、解压、写 `.develop` 与 `.vscode/settings.json`（JDK8）。独立 BAP 工作区下载到工作区根并替换窗口；VotaForge 容器工作区默认下载到 `<工作区>/<工程名>` 子目录，不污染工作区根，下载后可加入工作区并重载。
 - **更新依赖**：同步 `<工程>/lib` 到云端（服务端 md5 比对），更新 + 删除云端已无的本地 lib。
 - **编译**：「编译项目（本地）」用 JDK javac 编译 `src/**`→`bin/`；「编译单类（云端）」调 `compileSingleCode` 并以诊断标记到编辑器行（波浪线 + 问题面板）。
 - **启动调试**：把当前类发到云端运行（`startDebugJava`），在「BAP 调试」输出通道逐行显示 trace 与执行结果。
@@ -69,5 +69,6 @@ npm run package              # 同 build（构建 + 打包）
 ## 调试
 
 在 VS Code 打开本仓库根目录，按 `F5`（`.vscode/launch.json`）会以开发模式启动一个新窗口加载 `apps/vscode` 插件。
-> 注意：SCM / 连服务器等依赖工作区目录含 `.develop`，请在扩展宿主窗口（File → Open Folder）打开如
-> `gpf_dc_practicalTool` 这类 BAP 工程；仓库根自身没有 `.develop`，仅能看到命令面板命令。
+> 注意：SCM / 连服务器依赖窗口内存在含 `.develop` 的后端工程（插件会扫描 workspace folder 及子目录，最多 4 层），
+> 可直接打开 `gpf_dc_practicalTool` 这类 BAP 工程，也可打开 VotaForge 容器工作区（后端工程在子目录中）；
+> 仓库根自身没有 `.develop`，仅能看到命令面板命令。

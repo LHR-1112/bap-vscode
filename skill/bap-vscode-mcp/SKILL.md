@@ -11,7 +11,7 @@ description: 使用 BAP IDE（VS Code 插件）注册的 MCP server 对 BAP 云�
 
 适用：
 
-- 当前工作区是 BAP 云工程（根目录有 `.develop`），用户要求做云端操作（刷新 / 提交 / 发布 / 编译 / 单测 / 调试 / 历史 / 取当前代码 / 同步依赖）。
+- 当前工作区包含 BAP 云工程（任意 workspace folder 的根或其子目录存在 `.develop`），用户要求做云端操作（刷新 / 提交 / 发布 / 编译 / 单测 / 调试 / 历史 / 取当前代码 / 同步依赖）。
 - 用户明确要求 "通过 MCP / 让 AI 调用 BAP 能力"。
 - 需要组合多个云工程操作完成一个上层目标（如：先 refresh 看差异，再提交，再发布）。
 
@@ -26,11 +26,11 @@ description: 使用 BAP IDE（VS Code 插件）注册的 MCP server 对 BAP 云�
 
 用 MCP 工具前应确认：
 
-1. 当前工作区是 BAP 工程（根目录存在 `.develop`）；插件激活后 MCP server 才会启动（无 `.develop` 时 resolve 钩子中止启动）。
+1. 窗口内存在 BAP 工程（插件扫描 workspace folder 及子目录，最多 4 层，发现 `.develop` 即视为工程根）；插件激活后 MCP server 才会启动（未发现 `.develop` 时 resolve 钩子中止启动）。
 2. 用户在 VS Code 里已登录 / 连接（`.develop` 已配置 ws 地址、账号、工程）。
 3. 插件版本 ≥ 1.0.3（MCP 集成自该版本起）。
 
-若 AI 发现工具列表为空或调用报 `server not found`，先引导用户：打开含 `.develop` 的 BAP 工程根目录、确认插件已激活、重载窗口。
+若 AI 发现工具列表为空或调用报 `server not found`，先引导用户：打开含 `.develop` 的 BAP 工程目录（或包含后端子目录的 VotaForge 工作区）、确认插件已激活、重载窗口。
 
 ## 调用方式
 
@@ -62,7 +62,7 @@ MCP 工具通过 **工具名 + 参数对象** 调用（不是 shell 命令）。
 | [debugClass](./references/tools/debugClass.md) | 云端运行单个类 | `fullClass`, `code` |
 | [testProject](./references/tools/testProject.md) | 编译并运行单元测试 | `selectClass` |
 | [redirect](./references/tools/redirect.md) | 把当前工程重定向到另一 BAP 服务器（改写 `.develop` 并重连刷新） | `uri`, `user`, `pwd`, `projectUuid` |
-| [downloadProject](./references/tools/downloadProject.md) | 连接服务器、选择并下载 BAP 工程到工作区 | `uri`, `user`, `pwd`, `projectUuid` |
+| [downloadProject](./references/tools/downloadProject.md) | 连接服务器并下载 BAP 工程到工作区（VotaForge 工作区默认落到 `<工作区>/<工程名>` 子目录） | `uri`, `user`, `pwd`, `projectUuid`, `projectName`(可选), `targetDir`(可选) |
 | [listProjects](./references/tools/listProjects.md) | 登录后在当前环境列出可操作的项目列表 | `uri`, `user`, `pwd`(可选) |
 | [fetchCurrent](./references/tools/fetchCurrent.md) | 获取云端当前某个文件的内容 | `fullClass` 或 `path` |
 

@@ -40,7 +40,7 @@ export const BAP_TOOLS: IpTool[] = [
   T('debugClass', '把单个类放云端运行，返回结果。', obj({ fullClass: S('点分全类名'), code: S('源码') }, ['fullClass', 'code']), 'bapIde.scm.debugClass'),
   T('testProject', '本地编译并运行单元测试。', obj({ selectClass: S('只跑指定类') }), 'bapIde.scm.testProject'),
   T('redirect', '把当前工程重定向到另一 BAP 服务器。', obj({ uri: S('ws 地址'), user: S('账号'), pwd: S('密码'), projectUuid: S('目标工程'), projectName: S('目标工程名') }, ['uri', 'user', 'pwd', 'projectUuid']), 'bapIde.scm.redirect'),
-  T('downloadProject', '连接服务器并下载 BAP 工程到工作区。', obj({ uri: S('ws 地址'), user: S('账号'), pwd: S('密码'), projectUuid: S('工程 ID') }, ['uri', 'user', 'pwd', 'projectUuid']), 'bapIde.downloadProject'),
+  T('downloadProject', '连接服务器并下载 BAP 工程到工作区（VotaForge 工作区默认落到 <工作区>/<工程名> 子目录）。', obj({ uri: S('ws 地址'), user: S('账号'), pwd: S('密码'), projectUuid: S('工程 ID'), projectName: S('工程名（可选，用于确定默认目录名）'), targetDir: S('相对工作区根的下载目录（可选，必须位于工作区内）') }, ['uri', 'user', 'pwd', 'projectUuid']), 'bapIde.downloadProject'),
   T('listProjects', '登录后列出当前环境可操作的项目列表。', obj({ uri: S('ws 地址，缺省用当前连接'), user: S('账号'), pwd: S('密码') }), 'bapIde.listProjects'),
   T('fetchCurrent', '获取云端当前某个文件的内容。', obj({ fullClass: S('Java 点分全类名'), path: S('资源相对 src/res 路径') }), 'bapIde.fetchCurrent'),
 ];
