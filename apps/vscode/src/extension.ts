@@ -3,8 +3,20 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { BAP_IDE_NAME, BAP_IDE_VERSION } from '@bap/core';
 import { createRpcClient, type BridgeLaunchConfig } from '@bap/rpc';
-import { createBapSdk, downloadProject, detectJdk8, writeJavaSettings, type CJavaProjectDto } from '@bap/sdk';
-import { activateScm, checkLatestRelease, isNewer, DEFAULT_FEED, registerMcpServerProvider, isToolCall, discoverBackendProjects, isVfWorkspaceRoot, sanitizeProjectDirName, resolveDownloadTargetDir, directoryHasEntries } from '@bap/vscode-host';
+import { downloadProject, detectJdk8, writeJavaSettings, type CJavaProjectDto } from '@bap/sdk';
+import {
+  activateBackendProjects,
+  checkLatestRelease,
+  isNewer,
+  DEFAULT_FEED,
+  registerMcpServerProvider,
+  isToolCall,
+  discoverBackendProjects,
+  isVfWorkspaceRoot,
+  sanitizeProjectDirName,
+  resolveDownloadTargetDir,
+  validateDownloadTarget,
+} from '@bap/vscode-host';
 
 export function activate(context: vscode.ExtensionContext): void {
   // BAP IDE 输出通道：所有诊断日志写到「输出 → BAP IDE」，便于排查激活/命令/连接问题。
@@ -69,15 +81,16 @@ export function activate(context: vscode.ExtensionContext): void {
     mainClass: 'com.bap.dev.BridgeMain',
   };
 
-  /** 下载/重定位后写 Java 配置用的 JDK 路径：设置优先，其次自动探测。 */
-  const resolveJdk = (): string | undefined => {
-    const configured = vscode.workspace.getConfiguration('bapIde').get<string>('java8Path');
+  /** 下载/重定位后写 Java 配置用的 JDK 路径：设置优先（按目标目录的资源作用域读取），其次自动探测。 */
+  const resolveJdk = (destDir?: string): string | undefined => {
+    const scope = destDir ? vscode.Uri.file(destDir) : undefined;
+    const configured = vscode.workspace.getConfiguration('bapIde', scope).get<string>('java8Path');
     return configured && configured.trim() ? configured.trim() : detectJdk8();
   };
 
   /** 写 .vscode/settings.json 并记录结果（下载路径共用；quiet 用于 MCP 非交互路径）。 */
   const applyJavaSettings = (destDir: string, opts: { quiet?: boolean } = {}): void => {
-    const jdk = resolveJdk();
+    const jdk = resolveJdk(destDir);
     const result = writeJavaSettings(destDir, jdk);
     log.appendLine(
       result === 'skipped'
@@ -90,6 +103,28 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }
     if (!jdk && !opts.quiet) void vscode.window.showWarningMessage('BAP: 未检测到 JDK 1.8，已写入 JavaSE-1.8 配置，请在插件设置中填 bapIde.java8Path 或手动补 path');
+  };
+
+  /** 把下载目录加入工作区：等 onDidChangeWorkspaceFolders 落地（或 3s 兜底）后再重载。 */
+  const addFolderAndReload = async (dir: string, name: string): Promise<void> => {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        sub.dispose();
+        clearTimeout(timer);
+        resolve();
+      };
+      const sub = vscode.workspace.onDidChangeWorkspaceFolders(() => finish());
+      const timer = setTimeout(finish, 3000);
+      void vscode.workspace.updateWorkspaceFolders(folders.length, 0, {
+        uri: vscode.Uri.file(dir),
+        name,
+      });
+    });
+    await vscode.commands.executeCommand('workbench.action.reloadWindow');
   };
 
   // 下载工程：命令行入口（不依赖当前打开的工作区）。流式下载 + 解压 + 写 .develop（Java 桥完成），
@@ -120,22 +155,31 @@ export function activate(context: vscode.ExtensionContext): void {
               projectName || String(t.projectUuid),
               typeof t.targetDir === 'string' ? t.targetDir : undefined,
             );
-            // 独立工作区沿用「下载到根目录」；vf 工作区默认落到工程子目录，非空则拒绝覆盖。
-            if (destDir !== root && directoryHasEntries(destDir)) {
-              return { error: `目标目录已存在且非空：${destDir}` };
+            // 严格校验落点：工作区内 / vf 根禁止 / 不与已有工程重叠 / 目标不能已是工程。
+            let target: { destDir: string; existsNonEmpty: boolean };
+            try {
+              target = validateDownloadTarget(root, destDir, {
+                vf: isVfWorkspaceRoot(root),
+                existingProjectRoots: discoverBackendProjects().map((p) => p.root),
+              });
+            } catch (e) {
+              return { error: e instanceof Error ? e.message : String(e) };
             }
-            fs.mkdirSync(destDir, { recursive: true });
+            if (target.existsNonEmpty) {
+              return { error: `目标目录已存在且非空：${target.destDir}（MCP 下载不会覆盖非空目录）` };
+            }
+            fs.mkdirSync(target.destDir, { recursive: true });
             await downloadProject({
               rpc,
               uri: t.uri as string,
               user: t.user as string,
               pwd: t.pwd as string,
               projectUuid: t.projectUuid as string,
-              destDir,
+              destDir: target.destDir,
               onLog: (m) => log.appendLine(`[downloadProject] ${m}`),
             });
-            applyJavaSettings(destDir, { quiet: true });
-            return `已下载到 ${destDir}`;
+            applyJavaSettings(target.destDir, { quiet: true });
+            return `已下载到 ${target.destDir}（重新加载窗口后可在 SCM 中操作）`;
           } finally {
             await rpc.close();
           }
@@ -193,7 +237,11 @@ export function activate(context: vscode.ExtensionContext): void {
                 const s = v?.trim();
                 if (!s) return '必填（相对工作区根的路径）';
                 try {
-                  resolveDownloadTargetDir(root, picked.label, s);
+                  const d = resolveDownloadTargetDir(root, picked.label, s);
+                  validateDownloadTarget(root, d, {
+                    vf: true,
+                    existingProjectRoots: discoverBackendProjects().map((p) => p.root),
+                  });
                   return undefined;
                 } catch (e) {
                   return e instanceof Error ? e.message : String(e);
@@ -203,9 +251,21 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!input) return;
             destDir = resolveDownloadTargetDir(root, picked.label, input);
           }
-          if (destDir !== root && directoryHasEntries(destDir)) {
+          // 严格校验落点（UI 对「非空目录」保留二次确认；已有工程/越界一律拒绝）。
+          let target: { destDir: string; existsNonEmpty: boolean };
+          try {
+            target = validateDownloadTarget(root, destDir, {
+              vf: isVfWorkspaceRoot(root),
+              existingProjectRoots: discoverBackendProjects().map((p) => p.root),
+            });
+          } catch (e) {
+            void vscode.window.showErrorMessage(`BAP: ${e instanceof Error ? e.message : String(e)}`);
+            return;
+          }
+          destDir = target.destDir;
+          if (target.existsNonEmpty) {
             const ok = await vscode.window.showWarningMessage(
-              `目录已存在且非空：${destDir}`,
+              `目录已存在且非空：${destDir}。继续下载会覆盖同名文件。`,
               { modal: true },
               '继续下载',
             );
@@ -248,12 +308,7 @@ export function activate(context: vscode.ExtensionContext): void {
               '稍后',
             );
             if (action === '添加到工作区并重新加载') {
-              const folders = vscode.workspace.workspaceFolders ?? [];
-              vscode.workspace.updateWorkspaceFolders(folders.length, 0, {
-                uri: vscode.Uri.file(destDir),
-                name: picked.label,
-              });
-              await vscode.commands.executeCommand('workbench.action.reloadWindow');
+              await addFolderAndReload(destDir, picked.label);
             }
           } else {
             await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), false);
@@ -271,47 +326,29 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   try {
-    // 无打开的 workspace folder -> 无法扫描后端工程根，SCM 不启用
-    if (!vscode.workspace.workspaceFolders?.length) {
-      log.appendLine('[activate] 无 workspace folder，跳过 SCM');
-      void vscode.window.showWarningMessage('BAP: 请先打开一个含 .develop 的 BAP 工程文件夹');
-      return;
-    }
-
-    // 后端工程根 = 含 .develop 的目录（可能在 vf 工作区的子目录里），不再假设 workspaceFolders[0]。
-    const backendProjects = discoverBackendProjects();
-    if (backendProjects.length === 0) {
-      log.appendLine('[activate] 未发现 .develop，跳过 SCM 存储库');
-      return;
-    }
-    if (backendProjects.length > 1) {
-      log.appendLine(
-        `[activate] 发现 ${backendProjects.length} 个后端工程，M1 前暂使用第一个：${backendProjects[0].root}`,
-      );
-    }
-    const root = backendProjects[0].root;
-    log.appendLine(`[activate] backendProjectRoot = ${root}（${backendProjects[0].relativePath}）`);
-
-    // Java 桥子进程：用扩展内捆绑的 bridge jar 资产
+    // Java 桥子进程：用扩展内捆绑的 bridge jar 资产（每个后端工程各自懒启动一个桥）。
     log.appendLine(`[activate] launch bridge, classpath=${launch.classpath[0]}`);
 
-    const rpc = createRpcClient({ launch });
-    const sdk = createBapSdk({
-      rpc,
-      workspaceRoot: root,
-      onLog: (m) => log.appendLine(`[sdk] ${m}`),
-      javaHome: vscode.workspace.getConfiguration('bapIde').get<string>('java8Path')?.trim() || undefined,
+    const mcpServerPath = path.join(context.extensionPath, 'dist', 'mcp-server.js');
+    const activated = activateBackendProjects({
+      context,
+      launch,
+      iconDir: path.join(context.extensionPath, 'resources', 'scm-icons'),
       junitJarPath: path.join(context.extensionPath, 'resources', 'junit', 'junit-platform-console-standalone-1.11.0.jar'),
-      cloudSnapshotTtlMs: vscode.workspace.getConfiguration('bapIde').get<number>('refreshTtlMs') ?? 30000,
+      mcpServerPath,
+      log: {
+        debug: (m) => log.appendLine(m),
+        error: (m) => log.appendLine(`[ERROR] ${m}`),
+      },
     });
+    context.subscriptions.push(...activated.disposables);
 
-    // 注册 SCM（createSourceControl + 资源组 + 云端 diff + 文件角标 + 命令）
-    log.appendLine('[activate] 开始注册 SCM provider 与命令...');
-    context.subscriptions.push(...activateScm(context, sdk, root, { log }));
-    log.appendLine('[activate] SCM provider 与命令注册完成');
-
-    // 关闭扩展时回收 Java 桥
-    context.subscriptions.push({ dispose: () => void rpc.close() });
+    if (activated.projectCount === 0) {
+      // P1-1：无 .develop 时命令/菜单仍注册，调用时给提示而不是崩溃。
+      log.appendLine('[activate] 未发现 .develop：命令已注册，下载/打开 BAP 工程后自动启用 SCM');
+    } else {
+      log.appendLine(`[activate] 多工程宿主就绪（${activated.projectCount} 个后端工程）`);
+    }
     log.appendLine('[activate] 激活完成');
   } catch (e) {
     const msg = e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e);

@@ -3,7 +3,7 @@
 > 日期：2026-11-05
 > 依据：`docx/architecture/` 下 7 篇体系文档（plugin-split、workspace-protocol、votaforge-bap/lite/frontend/modeling/layout-designer）
 > 范围：本仓库 `apps/vscode` + `packages/vscode-host` + `packages/sdk`
-> 状态：**M0 实施中**（本文件随实施更新）
+> 状态：**M1 实施完成**（本文件随实施更新）
 
 ## 一、结论
 
@@ -221,3 +221,78 @@
 - 决策 5「无 `.develop` 时启动 MCP、只暴露引导工具」按 P1-8 在 M2 实施；M0 未改变「无工程不启动」。
 - 下载目标固定取第一个 workspace folder；多根工作区的工程选择随 P1-3 一起改。
 - `.develop` 明文 Password 不动（决策 6）；MCP `pwd` 仍为必填（决策 7 的可选化在 P2-4）。
+
+## 七、M1 实施记录
+
+> M1 范围：P1-1 ~ P1-6（多后端工程下 SCM / 命令正确），并按拍板意见**同版实现跨工程批量**、下载严格校验、重复检出写保护。
+
+### 7.1 完成项
+
+- [x] P1-1 无后端工程时菜单/命令不崩
+- [x] P1-2 工程注册表与稳定 `projectId`
+- [x] P1-3 每工程独立 SDK/RPC/SCM，命令按工程路由
+- [x] P1-4 每工程一个 SCM provider（`bap:<projectId>`）
+- [x] P1-5 `bap-original` / QuickDiff / 历史 URI 按工程隔离
+- [x] P1-6 无资源命令的「当前工程」定义 + 跨工程批量
+- [x] 下载目标严格校验（UI 确认 / MCP 拒绝）
+- [x] 重复检出：拒绝隐式写（显式选择/SCM/路径定位允许）
+- [x] MCP 工具名与既有参数保持兼容
+- [x] typecheck / 单测（17 文件 111 例）/ compile 通过
+
+### 7.2 关键设计
+
+- **稳定标识**：`projectId = ${workspaceFolderSlug}-${sha1(realRoot 的 POSIX 路径).slice(0, 8)}:${相对路径或 '.'}`。以 realpath 规范化，不以目录 basename 或云端工程名为键；同一 uuid 的多份检出互为 `peerProjectIds`。
+- **工程上下文**：`BackendProjectContext` 持有 root / projectId / 懒创建 SDK（对应一个 Java 桥 RPC）；`BackendProjectRegistry` 负责解析、批量、重复检出判定与写保护。
+- **当前工程解析顺序**：显式 `projectId` → 资源 URI 的 `pid`（虚拟 URI）→ SCM 对象反查 → 资源路径（取最深工程根）→ 活动编辑器 → 唯一工程 → QuickPick。显式路径落在任何工程外时报 `OUTSIDE_PROJECT`，不回退。
+- **命令注册**：`bapIde.*` 统一由 `registerProjectCommands` 注册一次；非交互/MCP 调用禁止弹 QuickPick，歧义时抛 `AMBIGUOUS` 并返回候选工程。
+- **批量**：无资源上下文的 UI 命令（refresh/commit/publish/updateAll/updateLibs/projectHistory/resetAgentInstructions 等）多工程时多选 QuickPick，按勾选顺序逐工程执行并汇总 `{projectId, hasBackendProject, ok, value|error}`；破坏性操作仅一次模态确认。`redirect` 仍限单工程（避免误建重复检出）。
+- **写保护**：所有隐式解析的写操作（commit/update/redirect 等）校验 `.develop` 身份并拒绝「同一 uuid 的另一份检出」；用户显式点击 SCM 资源、指定路径或批量勾选时视为显式授权。
+- **SCM 隔离**：provider id `bap:<projectId>`，`when` 条件为 `scmProvider =~ /^bap($|:)/`；分组 id 追加 projectId 段；文件装饰按 projectId 分区，多个 provider 刷新互不覆盖。
+- **虚拟文档**：`bap-original://` / `bap-history://` URI 带 `pid`；共享 provider 按 pid 找到工程 SDK，单工程旧 URI 无 pid 时回退唯一工程。
+- **连接一致性**：SDK 增加 epoch 与 single-flight 连接；`disconnect` / `redirect.apply` 递增 epoch 并清空快照，连接过程中产生的旧结果不再写回；RPC 增加 `close()`/`closeSync()` 与 `BRIDGE_CLOSED` 保护，工程销毁时回收子进程。
+- **MCP 兼容**：17 个工具名与参数不变；命令实现可接收内部路由键（`__tool`、`projectId`、`pid` 等），`toArgs` 统一剔除；命令返回 `{error}` 时 IPC 层转为 error 响应。
+
+### 7.3 新增 / 修改文件
+
+| 文件 | 变更 |
+| --- | --- |
+| `packages/vscode-host/src/projects/discovery.ts` | 新增：扫描结果 → 稳定描述（projectId、displayName、重复检出分组） |
+| `packages/vscode-host/src/projects/project-id.ts` | 新增：`projectId` 生成与 slug/哈希 |
+| `packages/vscode-host/src/projects/project-paths.ts` | 新增：路径归一化、包含判断、最深根查找 |
+| `packages/vscode-host/src/projects/project-identity.ts` | 新增：`.develop` 身份读取与变更检测 |
+| `packages/vscode-host/src/projects/project-context.ts` | 新增：单工程上下文（SDK 懒创建、写队列、身份采用） |
+| `packages/vscode-host/src/projects/project-registry.ts` | 新增：解析顺序、批量、QuickPick、重复检出写保护、SCM 反查 |
+| `packages/vscode-host/src/projects/project-errors.ts` | 新增：`AMBIGUOUS` / `OUTSIDE_PROJECT` / `UNKNOWN_PROJECT` / `DUPLICATE_CHECKOUT` / `CANCELLED` 等 |
+| `packages/vscode-host/src/projects/refresh-scheduler.ts` | 新增：刷新并发调度（默认 1，串行；dispose 拒绝排队任务） |
+| `packages/vscode-host/src/projects/activate.ts` | 新增：多工程激活编排（SCM、命令、共享虚拟文档 provider、上下文键、工作区变化提示、dispose） |
+| `packages/vscode-host/src/commands/command-router.ts` | 新增：`bapIde.*` 全量命令（UI/MCP 双通道）、批量执行、重定向 UI 移植 |
+| `packages/vscode-host/src/history/history-uri.ts` | 新增：`bap-original` / `bap-history` URI 构建与解析（含 pid） |
+| `packages/vscode-host/src/index.ts` | 导出多工程 API |
+| `packages/vscode-host/src/backend-projects.ts` | `validateDownloadTarget`：工作区内、禁止 vf 根、禁止与已有工程重叠、目标自身不能是工程 |
+| `packages/vscode-host/src/history/history-provider.ts` / `history-view.ts` | 按 pid 解析 SDK，历史面板按工程打开 |
+| `packages/vscode-host/src/scm/bap-scm-provider.ts` / `file-decoration.ts` / `original-provider.ts` / `scm/types.ts` | 每工程 provider、分组 id、装饰分区、`bap-original` 带 pid |
+| `packages/vscode-host/src/mcp/tool-exec.ts` / `tools.ts` / `host.ts` | 写操作串行化与身份校验、参数清洗、`{error}` 转 IPC 错误 |
+| `packages/sdk/src/services.ts` / `types.ts` | `projectId` 标记 Change、连接 epoch、redirect 断开旧连接 |
+| `packages/rpc/src/index.ts` | `disconnect` / `close` / `closeSync` / `closed` 语义 |
+| `apps/vscode/src/extension.ts` | 激活改为 `activateBackendProjects`；下载严格校验与「加入工作区 + 重载」 |
+| `apps/vscode/package.json` | SCM 菜单 `when` 支持多 provider；`java8Path` / `refreshTtlMs` 改为 resource scope |
+| `packages/vscode-host/test/project-*.test.ts` / `history-uri.test.ts` / `refresh-scheduler.test.ts` / `backend-projects.test.ts` / `scm-types.test.ts` | 新增/扩展单测 |
+
+### 7.4 行为速查
+
+- **激活**：扫描到 0 个工程 → 不创建 SCM，`bapIde.hasBackendProject=false`；1 个 → 自动使用；N 个 → 每工程一个 provider，命令按上下文路由。
+- **SCM**：每个工程独立 provider（label 含工程名）；同一 uuid 多份检出时 label 带工作区/相对路径区分，并在激活日志与 QuickPick 中提示。
+- **无资源命令**：能从 SCM 标题栏、活动编辑器或唯一工程确定目标就直接执行；多工程则多选；取消不报错。
+- **下载（UI）**：目标必须在工作区内；vf 根不可作为目标；不能与已有工程重叠；非空目录二次确认；完成后提示加入工作区并重载。
+- **下载（MCP）**：同上前三项；非空目录直接拒绝；返回目标绝对路径。
+- **重复检出**：只读操作允许；隐式写操作拒绝并提示显式选择；显式点击/勾选/指定路径允许写入。
+- **工程失效**：`.develop` 被删除/改写后，写操作返回 `PROJECT_STALE`；重定向成功后自动采用新身份并刷新 SCM。
+- **MCP**：工具列表与参数不变；多工程下的工程选择在 M2（P1-7）加入 `project` 参数前，按活动编辑器/最近使用工程解析。
+
+### 7.5 已知边界（M2 处理）
+
+- P1-7 ~ P1-12 未实施：MCP 工具尚无 `project` 参数与 `workspaceInfo`；无 `.develop` 时 MCP 仍不启动（决策 5 待 P1-8）。
+- Skill 尚未随 VSIX 分发，安装器与文档单工程假设待 P1-11 / P1-12。
+- 多根工作区的下载默认目标仍取第一个 workspace folder（M0 遗留），交互路径可由 `targetDir` 覆盖。
+- 工作区 folder 增删目前只提示重载窗口，未做增量 attach/detach（P2-2）。
+- `.develop` 明文 Password 与 MCP `pwd` 必填保持不变（决策 6/7，P2-4）。

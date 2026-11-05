@@ -1,15 +1,22 @@
 // BAP SCM Provider：把 VS Code 原生 Source Control 视图接到 BAP 云端工程。
 // 数据源 = sdk.refresh() 的变更列表；提交 = sdk.code.save；发布 = sdk.publish；
 // diff 云端原版 = sdk.code.getRemote/getRes（经 bap-original content provider）。
+// 多工程：每工程一个 provider（id=`bap:<projectId>`），组 id=`<projectId>:added|modified|deleted`。
 import * as vscode from 'vscode';
 import * as path from 'path';
 import type { BapSdk, Change } from '@bap/sdk';
 import { scmDecoFor, statusIconFile } from './types';
+import { bapOriginalUriSpec } from './types';
+import { isIgnoredProjectPath, isInProjectSrc, pathKey } from '../projects/project-paths';
 
 export interface BapScmProviderHandle {
   sourceControl: vscode.SourceControl;
-  /** force=true 强制重拉云端快照（手动刷新）；false=自动刷新（TTL 内复用云端快照）。 */
-  refresh(force?: boolean): Promise<Change[]>;
+  resourceGroups: readonly vscode.SourceControlResourceGroup[];
+  projectId: string;
+  displayName: string;
+  /** force=true 强制重拉云端快照（手动刷新）；false=自动刷新（TTL 内复用云端快照）。
+   *  throwOnError=true 时不吞错（MCP/批量命令需要真实失败）。 */
+  refresh(force?: boolean, opts?: { throwOnError?: boolean }): Promise<Change[]>;
   getChanges(): Change[];
   getChangeByPath(fsPath: string): Change | undefined;
   getDecorations(): BapFileDecorationMap;
@@ -26,6 +33,12 @@ export interface BapScmProviderHandle {
 export type BapFileDecorationMap = Map<string, string>;
 
 export interface BapScmProviderOptions {
+  /** 工程稳定 ID；缺省 `legacy`（兼容旧的单工程激活入口）。 */
+  projectId?: string;
+  /** 展示名（创建 SourceControl 标签后不可改）。 */
+  displayName?: string;
+  /** SourceControl id；缺省 `bap`（legacy）或 `bap:<projectId>`。 */
+  providerId?: string;
   /** 是否监听文件变更自动 refresh。默认 true。 */
   autoRefresh?: boolean;
   /** 刷新节流（毫秒）。默认 500。 */
@@ -34,6 +47,17 @@ export interface BapScmProviderOptions {
   minRefreshIntervalMs?: number;
   /** 状态 SVG 图标目录（M/A/D 的 status-*.svg 所在，如 plugin/resources/scm-icons）。 */
   iconDir?: string;
+  /** 路径是否归本工程所有（多工程 watcher 防跨工程刷新）。 */
+  ownsPath?: (fsPath: string) => boolean;
+  /** 刷新完成回调（宿主更新文件角标）。 */
+  onChanges?: (changes: Change[]) => void;
+  /** provider 释放回调（宿主清理角标 owner）。 */
+  onDispose?: () => void;
+  log?: { debug(msg: string): void; error(msg: string): void };
+}
+
+function groupId(projectId: string, name: 'added' | 'modified' | 'deleted'): string {
+  return projectId === 'legacy' ? name : `${projectId}:${name}`;
 }
 
 export function createBapScmProvider(
@@ -41,87 +65,117 @@ export function createBapScmProvider(
   workspaceRoot: string,
   opts: BapScmProviderOptions = {},
 ): BapScmProviderHandle {
+  const projectId = opts.projectId ?? 'legacy';
+  const displayName = opts.displayName ?? 'BAP';
+  const providerId = opts.providerId ?? (projectId === 'legacy' ? 'bap' : `bap:${projectId}`);
+  const label = projectId === 'legacy' ? 'BAP' : `BAP · ${displayName}`;
   const scc = vscode.scm;
-  const sc = scc.createSourceControl('bap', 'BAP', vscode.Uri.file(workspaceRoot));
+  const sc = scc.createSourceControl(providerId, label, vscode.Uri.file(workspaceRoot));
 
   // git "files changed" 风格三组：按文件状态分组（新增/更改/删除）
   const groups = {
-    added: sc.createResourceGroup('added', '新增'),
-    modified: sc.createResourceGroup('modified', '更改'),
-    deleted: sc.createResourceGroup('deleted', '删除'),
+    added: sc.createResourceGroup(groupId(projectId, 'added'), '新增'),
+    modified: sc.createResourceGroup(groupId(projectId, 'modified'), '更改'),
+    deleted: sc.createResourceGroup(groupId(projectId, 'deleted'), '删除'),
   };
-  (Object.values(groups)).forEach((g) => (g.hideWhenEmpty = true));
+  Object.values(groups).forEach((g) => (g.hideWhenEmpty = true));
 
   let changes: Change[] = [];
   const decoMap: BapFileDecorationMap = new Map();
+  let disposed = false;
 
   const qdp: vscode.QuickDiffProvider = {
     provideOriginalResource(uri: vscode.Uri): vscode.ProviderResult<vscode.Uri> {
-      const ch = changes.find((c) => c.absolutePath === uri.fsPath);
+      const ch = getChangeByPath(uri.fsPath);
       if (!ch) return undefined;
-      // 返回 bap-original 虚拟 URI：path 段用相对 workspace 的 rel，query 带 folder/res/rel
-      const rel = toWorkspaceRel(workspaceRoot, ch.absolutePath);
-      const q = new URLSearchParams();
-      q.set('folder', ch.folder);
-      q.set('res', String(ch.isResource));
-      q.set('rel', ch.relativePath);
-      return vscode.Uri.parse(`bap-original://bap/${encodeURIComponent(rel)}?${q.toString()}`);
+      return vscode.Uri.parse(
+        bapOriginalUriSpec(workspaceRoot, ch.relativePath, ch.folder, ch.isResource, projectId),
+      );
     },
   };
   sc.quickDiffProvider = qdp;
   sc.inputBox.placeholder = '提交信息（可选）';
-  // 「提交」大按钮 / 输入框回车触发提交（git 同款：acceptInputCommand → commit 命令）
-  sc.acceptInputCommand = { command: 'bapIde.scm.commit', title: '提交全部' };
+  // 「提交」大按钮 / 输入框回车触发提交（git 同款：acceptInputCommand → commit 命令）。
+  // 带 projectId，确保点的是哪个 provider 就提交哪个工程（否则多工程标题栏无法区分）。
+  sc.acceptInputCommand = {
+    command: 'bapIde.scm.commit',
+    title: '提交全部',
+    arguments: [{ projectId }],
+  };
   sc.count = 0;
 
   let lastChanges: Change[] = [];
 
-  // 刷新串行化：一次只跑一个；期间新触发的刷新合并到「排队」，当前完成后再刷。
-  // 避免刷新耗时超过 debounce 间隔时并发堆积（多次 refresh 同时跑，耗性能）。
-  let refreshing = false;
-  let refreshQueued = false;
-  let refreshQueuedForce = false; // 排队请求合并后的 force：任一排队刷新要求强制都要保留
-  let lastRefreshEnd = 0;
-  const MIN_REFRESH_INTERVAL_MS = opts.minRefreshIntervalMs ?? 1000;
+  // 刷新合并：同一时刻只跑一个 sdk.refresh；期间所有请求合并成一轮，
+  // 任一请求要求 force 则本轮 force；strict 调用方在失败时拿到 reject。
+  interface RefreshWaiter {
+    resolve: (v: Change[]) => void;
+    reject: (e: unknown) => void;
+    throwOnError: boolean;
+  }
+  let waiters: RefreshWaiter[] = [];
+  let running: Promise<Change[]> | null = null;
+  let queued = false;
+  let queuedForce = false;
 
-  async function refresh(force = false): Promise<Change[]> {
-    // 正在刷新：不并发，标记排队，返回当前（上次）结果
-    if (refreshing) {
-      refreshQueued = true;
-      refreshQueuedForce = refreshQueuedForce || force;
-      return changes;
-    }
-    refreshing = true;
-    try {
-      changes = await sdk.refresh(force);
-      applyToGroups(changes);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      void vscode.window.setStatusBarMessage(`BAP: 刷新失败 - ${msg}`, 6000);
-      return changes;
-    } finally {
-      refreshing = false;
-      lastRefreshEnd = Date.now();
-      // 期间有变更请求：距上次刷新结束足够久则立即再刷，否则再 debounce（限间隔）
-      if (refreshQueued) {
-        refreshQueued = false;
-        const queuedForce = refreshQueuedForce;
-        refreshQueuedForce = false;
-        if (Date.now() - lastRefreshEnd >= MIN_REFRESH_INTERVAL_MS) {
-          void refresh(queuedForce);
-        } else {
-          scheduleRefresh(queuedForce);
+  function refresh(force = false, refreshOpts: { throwOnError?: boolean } = {}): Promise<Change[]> {
+    if (disposed) return Promise.resolve(changes);
+    return new Promise<Change[]>((resolve, reject) => {
+      waiters.push({ resolve, reject, throwOnError: !!refreshOpts.throwOnError });
+      if (running) {
+        queued = true;
+        queuedForce = queuedForce || force;
+        return;
+      }
+      void drain();
+    });
+  }
+
+  async function drain(): Promise<void> {
+    if (running) return;
+    do {
+      queued = false;
+      const force = queuedForce;
+      queuedForce = false;
+      const batch = waiters;
+      waiters = [];
+      running = (async () => {
+        try {
+          const next = await sdk.refresh(force);
+          if (disposed) return next;
+          changes = next;
+          applyToGroups(changes);
+          opts.log?.debug(`[${displayName}][refresh] 完成，变更=${lastChanges.length}`);
+          return changes;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          opts.log?.error(`[${displayName}][refresh] 失败: ${msg}`);
+          if (batch.every((w) => !w.throwOnError)) {
+            void vscode.window.setStatusBarMessage(`BAP: ${displayName} 刷新失败 - ${msg}`, 6000);
+          }
+          throw e;
+        } finally {
+          running = null;
+        }
+      })();
+      try {
+        const result = await running;
+        for (const w of batch) w.resolve(result);
+      } catch (e) {
+        for (const w of batch) {
+          if (w.throwOnError) w.reject(e);
+          else w.resolve(changes);
         }
       }
-    }
-    return changes;
+    } while (queued && !disposed);
+    if (!running && waiters.length > 0 && !disposed) void drain();
   }
 
   function applyToGroups(list: Change[]): void {
+    if (disposed) return;
     const dirty = list.filter((c) => c.status !== 'NORMAL');
     lastChanges = dirty;
 
-    // 按文件状态分成三组（新增/更改/删除）；A/M/D 之外不再有暂存/未暂存维度
     groups.added.resourceStates = dirty
       .filter((c) => c.status === 'ADDED')
       .map((c) => toResourceState(c));
@@ -133,16 +187,13 @@ export function createBapScmProvider(
       .map((c) => toResourceState(c));
     sc.count = dirty.length;
 
-    // 更新文件装饰表
     decoMap.clear();
-    for (const c of list) {
-      if (c.status !== 'NORMAL') decoMap.set(c.absolutePath, c.status);
-    }
+    for (const c of dirty) decoMap.set(c.absolutePath, c.status);
+    opts.onChanges?.(list);
   }
 
   function toResourceState(c: Change): vscode.SourceControlResourceState {
     const deco = scmDecoFor(c.status);
-    // git 同款：带颜色 A/M/D 用插件 resources/scm-icons/ 下的 SVG 文件（Uri.file 引用，不用 data-URI）。
     const iconFile = statusIconFile(c.status);
     const iconUri = opts.iconDir && iconFile ? vscode.Uri.file(path.join(opts.iconDir, iconFile)) : undefined;
     const themed = iconUri ? { iconPath: iconUri } : undefined;
@@ -153,18 +204,25 @@ export function createBapScmProvider(
       faded: deco?.faded,
       tooltip: deco?.tooltip,
     };
+    const change: Change = {
+      ...c,
+      projectId,
+      projectRoot: workspaceRoot,
+    };
     return {
       resourceUri: vscode.Uri.file(c.absolutePath),
-      command: { command: 'bapIde.scm.openDiff', title: '打开 Diff', arguments: [c] },
+      command: { command: 'bapIde.scm.openDiff', title: '打开 Diff', arguments: [change] },
       decorations,
-      // A/M/D 由 iconPath 图标表达，不占用 contextValue。
+      contextValue: `bap:${projectId}`,
     };
   }
 
-  /** 按本地绝对路径解析变更（SCM context 菜单把 resourceUri 而非 Change 传给命令）。
-   *  因为 toResourceState 里 resourceUri = Uri.file(c.absolutePath)，故可用 fsPath 精确匹配。 */
+  /** 按本地绝对路径解析变更（SCM context 菜单把 resourceUri 而非 Change 传给命令）。 */
   function getChangeByPath(fsPath: string): Change | undefined {
-    return lastChanges.find((c) => c.absolutePath === fsPath);
+    const exact = lastChanges.find((c) => c.absolutePath === fsPath);
+    if (exact) return exact;
+    const key = pathKey(fsPath);
+    return lastChanges.find((c) => pathKey(c.absolutePath) === key);
   }
 
   /** 提交回读验证告警：云端内容与提交内容不一致（疑似服务端转码损坏）时弹出。 */
@@ -173,82 +231,49 @@ export function createBapScmProvider(
       const detail = result.verifyWarnings.slice(0, 5).join('\n');
       const more = result.verifyWarnings.length > 5 ? `\n…等 ${result.verifyWarnings.length} 个文件` : '';
       void vscode.window
-        .showWarningMessage('BAP: 云端存下来的内容与提交的内容不一致，重新拉取可能得到乱码！', { modal: true }, '知道了')
+        .showWarningMessage(
+          `BAP: [${displayName}] 云端存下来的内容与提交的内容不一致，重新拉取可能得到乱码！`,
+          { modal: true },
+          '知道了',
+        )
         .then(() => {
           void vscode.window.showInformationMessage(detail + more, { modal: true });
         });
     }
   }
 
-  /** 提交单个文件到云端。 */
   async function commitFile(change: Change, comment = ''): Promise<void> {
     const r = await sdk.code.saveChanges([change], comment);
     warnVerify(r);
-    await refresh(true);
+    await refresh(true, { throwOnError: true });
   }
 
-  /** 更新单个文件：从云端拉取最新版覆盖本地（新增文件删除本地）。 */
   async function updateFile(change: Change): Promise<void> {
     await sdk.discardAll([change]);
-    await refresh(true);
+    await refresh(true, { throwOnError: true });
   }
 
-  /** 批量提交一组文件到云端。 */
-  async function commitChanges(changes: Change[], comment = ''): Promise<void> {
-    if (changes.length === 0) {
+  async function commitChanges(list: Change[], comment = ''): Promise<void> {
+    if (list.length === 0) {
       void vscode.window.showWarningMessage('BAP: 没有更改可提交');
       return;
     }
-    const r = await sdk.code.saveChanges(changes, comment);
+    const r = await sdk.code.saveChanges(list, comment);
     warnVerify(r);
-    await refresh(true);
+    await refresh(true, { throwOnError: true });
   }
 
-  /** 批量更新一组文件：从云端拉取最新版覆盖本地（新增文件删除本地）。 */
-  async function updateChanges(changes: Change[]): Promise<void> {
-    await sdk.discardAll(changes);
-    await refresh(true);
+  async function updateChanges(list: Change[]): Promise<void> {
+    await sdk.discardAll(list);
+    await refresh(true, { throwOnError: true });
   }
 
-  /** 一键更新所有变更：从云端取最新版覆盖本地/新增删除，再刷新。 */
   async function updateAll(): Promise<void> {
     await sdk.discardAll(lastChanges);
-    await refresh(true);
-  }
-
-  // ---- 生命周期 ----
-  const subscriptions: vscode.Disposable[] = [];
-
-  let debounceTimer: NodeJS.Timeout | undefined;
-  function scheduleRefresh(force = false): void {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      void refresh(force);
-    }, opts.debounceMs ?? 500);
-  }
-
-  const isInWorkspace = (u: vscode.Uri): boolean =>
-    u.fsPath.startsWith(workspaceRoot) || u.scheme === 'file';
-
-  if (opts.autoRefresh !== false) {
-    subscriptions.push(
-      vscode.workspace.onDidChangeTextDocument((e) => {
-        if (isInWorkspace(e.document.uri)) scheduleRefresh();
-      }),
-      vscode.workspace.onDidCreateFiles((e) => {
-        if (e.files.some(isInWorkspace)) scheduleRefresh();
-      }),
-      vscode.workspace.onDidDeleteFiles((e) => {
-        if (e.files.some(isInWorkspace)) scheduleRefresh();
-      }),
-      vscode.workspace.onDidRenameFiles((e) => {
-        if (e.files.some((f) => isInWorkspace(f.oldUri) || isInWorkspace(f.newUri))) scheduleRefresh();
-      }),
-    );
+    await refresh(true, { throwOnError: true });
   }
 
   async function commit(comment = ''): Promise<void> {
-    // 无暂存概念：提交所有变更（新增/更改/删除）。
     const toCommit = lastChanges;
     if (toCommit.length === 0) {
       void vscode.window.showWarningMessage('BAP: 没有更改可提交。');
@@ -256,11 +281,63 @@ export function createBapScmProvider(
     }
     const r = await sdk.code.saveChanges(toCommit, comment);
     warnVerify(r);
-    await refresh(true);
+    await refresh(true, { throwOnError: true });
+  }
+
+  // ---- 生命周期 ----
+  const subscriptions: vscode.Disposable[] = [];
+  let debounceTimer: NodeJS.Timeout | undefined;
+
+  function scheduleRefresh(force = false): void {
+    if (disposed) return;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = undefined;
+      void refresh(force).catch(() => undefined);
+    }, opts.debounceMs ?? 500);
+  }
+
+  /** 该 URI 是否属于本工程的 src/（file scheme + 未被忽略 + 最深包含者）。 */
+  const ownsUri = (u: vscode.Uri): boolean => {
+    if (u.scheme !== 'file') return false;
+    if (!isInProjectSrc(workspaceRoot, u.fsPath)) return false;
+    if (isIgnoredProjectPath(workspaceRoot, u.fsPath)) return false;
+    return opts.ownsPath ? opts.ownsPath(u.fsPath) : true;
+  };
+
+  if (opts.autoRefresh !== false) {
+    // 保存：编辑器内改动落盘后刷新（比 onDidChangeTextDocument 安静得多）。
+    subscriptions.push(
+      vscode.workspace.onDidSaveTextDocument((doc) => {
+        if (ownsUri(doc.uri)) scheduleRefresh();
+      }),
+    );
+    // 新建/删除/重命名：watcher 只看本工程 src/**，避免多工程互相触发。
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(workspaceRoot), 'src/**'),
+    );
+    subscriptions.push(
+      watcher,
+      watcher.onDidCreate((u) => {
+        if (ownsUri(u)) scheduleRefresh();
+      }),
+      watcher.onDidChange((u) => {
+        if (ownsUri(u)) scheduleRefresh();
+      }),
+      watcher.onDidDelete((u) => {
+        if (ownsUri(u)) scheduleRefresh();
+      }),
+      vscode.workspace.onDidRenameFiles((e) => {
+        if (e.files.some((f) => ownsUri(f.oldUri) || ownsUri(f.newUri))) scheduleRefresh();
+      }),
+    );
   }
 
   return {
     sourceControl: sc,
+    resourceGroups: Object.values(groups),
+    projectId,
+    displayName,
     refresh,
     getChanges: () => lastChanges,
     getChangeByPath,
@@ -272,15 +349,20 @@ export function createBapScmProvider(
     updateAll,
     commit,
     dispose() {
-      for (const s of subscriptions) s.dispose();
+      if (disposed) return;
+      disposed = true;
       if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = undefined;
+      for (const s of subscriptions) s.dispose();
       for (const g of Object.values(groups)) g.dispose();
       sc.dispose();
+      decoMap.clear();
+      lastChanges = [];
+      try {
+        opts.onDispose?.();
+      } catch {
+        /* ignore */
+      }
     },
   };
-}
-
-function toWorkspaceRel(root: string, abs: string): string {
-  const rel = abs.startsWith(root) ? abs.slice(root.length) : abs;
-  return rel.replace(/^[/\\]+/, '');
 }

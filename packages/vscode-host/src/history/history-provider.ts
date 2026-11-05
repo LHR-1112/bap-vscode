@@ -1,34 +1,60 @@
 // bap-history：按历史版本 uuid 返回该版本文件内容（供 diff 左侧/右侧只读使用）。
+// 多工程：URI 带 pid，resolver 按工程选择 SDK；同 scheme 只注册一次。
 import * as vscode from 'vscode';
 import type { BapSdk } from '@bap/sdk';
+import { bapHistoryUriString, parseHistoryUri } from './history-uri';
 
-function parseQuery(uri: vscode.Uri): Record<string, string> {
-  const out: Record<string, string> = {};
-  uri.query.split('&').forEach((kv) => {
-    const [k, v] = kv.split('=');
-    if (k && v !== undefined) out[k] = decodeURIComponent(v);
-  });
-  return out;
-}
+export type HistorySdkResolver = (projectId?: string) => BapSdk | undefined;
 
-export function registerHistoryContentProvider(sdk: BapSdk): vscode.Disposable {
-  const provider: vscode.TextDocumentContentProvider = {
-    async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
-      const query = parseQuery(uri);
-      const uuid = query.uuid || decodeURIComponent(uri.path.replace(/^bap-history:\/\/bap\//, ''));
-      const isRes = query.res === 'true';
-      if (isRes) {
-        const dto = await sdk.history.getHistoryFile(uuid);
-        return dto?.fileBin ? Buffer.from(dto.fileBin, 'base64').toString('utf8') : '';
+let resolver: HistorySdkResolver | undefined;
+let registration: vscode.Disposable | undefined;
+let refCount = 0;
+
+export function registerHistoryContentProvider(source: BapSdk | HistorySdkResolver): vscode.Disposable {
+  if (typeof source === 'function') {
+    resolver = source;
+  } else {
+    const sdk = source;
+    resolver = () => sdk;
+  }
+
+  if (!registration) {
+    const provider: vscode.TextDocumentContentProvider = {
+      async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+        const parsed = parseHistoryUri(uri.path, uri.query);
+        const sdk = resolver?.(parsed.projectId);
+        if (!sdk) return '';
+        if (parsed.isResource) {
+          const dto = await sdk.history.getHistoryFile(parsed.uuid);
+          return dto?.fileBin ? Buffer.from(dto.fileBin, 'base64').toString('utf8') : '';
+        }
+        const code = await sdk.history.getHistoryCode(parsed.uuid);
+        return code?.code ?? '';
+      },
+    };
+    registration = vscode.workspace.registerTextDocumentContentProvider('bap-history', provider);
+    refCount = 1;
+  } else {
+    refCount++;
+  }
+
+  let disposed = false;
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      refCount--;
+      if (refCount <= 0) {
+        registration?.dispose();
+        registration = undefined;
+        resolver = undefined;
+        refCount = 0;
       }
-      const code = await sdk.history.getHistoryCode(uuid);
-      return code?.code ?? '';
     },
   };
-  return vscode.workspace.registerTextDocumentContentProvider('bap-history', provider);
 }
 
-/** 构造 bap-history 虚拟 URI（历史版本内容）。 */
-export function bapHistoryUri(uuid: string, isRes: boolean): vscode.Uri {
-  return vscode.Uri.parse(`bap-history://bap/${encodeURIComponent(uuid)}?res=${isRes ? 1 : 0}`);
+/** 构造 bap-history 虚拟 URI（历史版本内容）。res 写 true/false，读兼容 1/0。 */
+export function bapHistoryUri(uuid: string, isRes: boolean, projectId?: string): vscode.Uri {
+  return vscode.Uri.parse(bapHistoryUriString(uuid, isRes, projectId));
 }

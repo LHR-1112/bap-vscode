@@ -15,10 +15,15 @@
 
 ## 落点规则
 
+- 基准目录是**第一个 workspace folder**；`targetDir` 按 `path.resolve(基准目录, targetDir)` 解析。
 - **独立 BAP 工作区**（工作区根无 `votaforge.workspace.json` / `.votaforge/`）：不传 `targetDir` 时下载到工作区根（保持旧行为）。
 - **VotaForge 容器工作区**：不传 `targetDir` 时下载到 `<工作区根>/<projectName>`；不允许落到工作区根，避免污染 vf 根。
-- `targetDir` 解析为 `path.resolve(工作区根, targetDir)`，绝对路径与越界路径会被拒绝。
-- 目标子目录已存在且非空时**拒绝覆盖**（返回错误）；如需重新下载，先清理目录或显式换一个 `targetDir`。
+- 目标必须满足，否则调用返回错误：
+  - 位于工作区内，且解析后不是工作区根（vf 模式）；
+  - 不是已存在的普通文件；
+  - 目标自身不能已含 `.develop`（即已是一个后端工程）；
+  - 不能包含任一已有后端工程根，也不能位于任一已有后端工程内。
+- 目标目录已存在且非空时 **MCP 直接拒绝**（不覆盖）；如需重新下载，先清理目录或换一个 `targetDir`。交互式下载会改为二次确认。
 
 ## 示例
 

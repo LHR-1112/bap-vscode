@@ -132,6 +132,10 @@ export interface Change {
   isResource: boolean;
   fullClass?: string;
   md5: string;
+  /** 所属后端工程稳定 ID（多工程时由 SDK 回填）。 */
+  projectId?: string;
+  /** 所属后端工程根绝对路径。 */
+  projectRoot?: string;
 }
 
 /** 历史版本节点（版本列表 / 某版本内文件 / 文件历史）。key 点分=Java fullClass，含 '/'=资源。 */

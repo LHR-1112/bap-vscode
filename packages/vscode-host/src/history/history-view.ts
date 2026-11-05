@@ -7,8 +7,20 @@ export type HistoryKind = 'project' | 'file';
 
 type Log = (msg: string) => void;
 
+export interface HistoryViewUi {
+  /** 工程标识：写入 bap-history URI，供多工程 content provider 选择 SDK。 */
+  projectId?: string;
+  /** 工程展示名（面板标题消歧）。 */
+  displayName?: string;
+}
+
 /** 打开历史 diff：左侧 = 选中版本内容（bap-history），右侧 = 该文件前一版本内容。 */
-export async function openHistoryDiff(sdk: BapSdk, node: VersionNode, log?: Log): Promise<void> {
+export async function openHistoryDiff(
+  sdk: BapSdk,
+  node: VersionNode,
+  log?: Log,
+  projectId?: string,
+): Promise<void> {
   log = log ?? (() => {});
   if (!node.uuid || !node.key) return;
   const isRes = (node.key ?? '').includes('/');
@@ -22,8 +34,8 @@ export async function openHistoryDiff(sdk: BapSdk, node: VersionNode, log?: Log)
     return;
   }
   log(`[history.openDiff] ${node.key} #${node.versionNo} vs #${prev.versionNo}`);
-  const left = bapHistoryUri(node.uuid, isRes);
-  const right = bapHistoryUri(prev.uuid, isRes);
+  const left = bapHistoryUri(node.uuid, isRes, projectId);
+  const right = bapHistoryUri(prev.uuid, isRes, projectId);
   await vscode.commands.executeCommand(
     'vscode.diff',
     left,
@@ -40,10 +52,15 @@ export async function openHistoryView(
   context: vscode.ExtensionContext,
   remoteKey?: string,
   log?: Log,
+  ui: HistoryViewUi = {},
 ): Promise<void> {
   const l = log ?? (() => {});
   l(`[history.openHistoryView] 打开 ${kind}${remoteKey ? ` (${remoteKey})` : ''}`);
-  const title = kind === 'project' ? '项目历史' : `文件历史 ${remoteKey ?? ''}`;
+  const prefix = ui.displayName ? `${ui.displayName} · ` : '';
+  const title =
+    kind === 'project'
+      ? `${prefix}项目历史`
+      : `${prefix}文件历史 ${remoteKey ?? ''}`;
   const panel = vscode.window.createWebviewPanel('bapIde.historyView', title, vscode.ViewColumn.One, {
     enableScripts: true,
     retainContextWhenHidden: true,
@@ -84,12 +101,12 @@ export async function openHistoryView(
           await panel.webview.postMessage({ type: 'files', files });
         } else if (kind === 'file' && msg.commit) {
           l(`[history] select #${msg.commit.versionNo}，开 diff`);
-          await openHistoryDiff(sdk, msg.commit, l);
+          await openHistoryDiff(sdk, msg.commit, l, ui.projectId);
         }
         return;
       }
       if (msg.type === 'openDiff' && msg.file) {
-        await openHistoryDiff(sdk, msg.file, l);
+        await openHistoryDiff(sdk, msg.file, l, ui.projectId);
       }
     } catch (e) {
       l(`[history] 查询失败: ${e instanceof Error ? e.message : String(e)}`);

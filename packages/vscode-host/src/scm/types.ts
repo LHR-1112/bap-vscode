@@ -1,11 +1,14 @@
 // SCM 桥接的类型与纯映射函数（不依赖 vscode 运行时，便于单测）。
 import type { Status } from '@bap/sdk';
+import { bapOriginalUriString, parseOriginalUri } from '../history/history-uri';
 
 export type ScmStatus = Status;
 
-/** resource 组 id（createResourceGroup 的 id）→ 变更状态。 */
+/** resource 组 id（createResourceGroup 的 id）→ 变更状态。
+ *  兼容 legacy `added` 与多工程 `${projectId}:added`（projectId 自身含 ':'，取最后一段）。 */
 export function groupToStatus(id: string): Status | undefined {
-  switch (id) {
+  const name = id.includes(':') ? id.slice(id.lastIndexOf(':') + 1) : id;
+  switch (name) {
     case 'added':
       return 'ADDED';
     case 'modified':
@@ -100,39 +103,34 @@ export function relToResPath(rel: string): string {
 
 /**
  * 构造 bap-original 虚拟 URI（供 QuickDiffProvider 返回）。
- * query 携带 folder + isResource + 相对路径，便于 content provider 反推并调 sdk 取云端原版。
+ * query 携带 pid + folder + isResource + 相对路径，便于 content provider 反推并调对应工程的 sdk。
  */
 export function bapOriginalUriSpec(
   workspaceRoot: string,
   relativePath: string,
   folder: string,
   isResource: boolean,
+  projectId?: string,
 ): string {
-  // 用相对 workspace 的路径做 path 段，folder/isResource 放 query
-  const q = new URLSearchParams();
-  q.set('folder', folder);
-  q.set('res', String(isResource));
-  q.set('rel', relativePath);
-  // encodeURIComponent 相对路径（可能含斜杠）
-  const relEnc = encodeURIComponent(relativePath);
-  // 用固定 host + path（不含真实文件路径，避免 scheme 冲突）
-  return `bap-original://bap/${relEnc}?${q.toString()}`;
+  // path 段只作 URI 唯一标识；云端定位以 query.rel 为准（与旧实现保持兼容）。
+  void workspaceRoot;
+  return bapOriginalUriString({
+    projectId,
+    workspaceRel: relativePath,
+    relativePath,
+    folder,
+    isResource,
+  });
 }
 
-/** 从 bap-original URI 反推（用于 content provider 恢复 folder/isResource/rel）。 */
+/** 从 bap-original URI 反推（用于 content provider 恢复 folder/isResource/rel/projectId）。 */
 export function parseBapOriginalUri(uriPath: string, query: Record<string, string>): {
+  projectId?: string;
   folder: string;
   isResource: boolean;
   relativePath: string;
 } {
-  // 优先用 query.rel（authority：Change.relativePath，相对 src/<folder> 或 src/res）。
-  // uriPath 的 path 段只是 URI 唯一标识（相对 workspace），可能带 src/core / src/res 前缀，
-  // 不能用于定位云端文件，否则资源/Java 会因路径多前缀而查不到云端原版、diff 整份变新增。
-  const pathRel = decodeURIComponent(uriPath.replace(/^bap-original:\/\/bap\//, ''));
-  const rel = (query.rel || pathRel).replace(/^\//, '');
-  return {
-    folder: query.folder || '',
-    isResource: query.res === 'true',
-    relativePath: rel,
-  };
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) qs.set(k, v);
+  return parseOriginalUri(uriPath, qs.toString());
 }

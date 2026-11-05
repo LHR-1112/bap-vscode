@@ -1,7 +1,7 @@
 // BapSdk 工厂 + 高层业务方法（面向业务，不暴露 RPC）。
 import * as fs from 'fs';
 import * as path from 'path';
-import { loadDevelop, writeDevelop } from './develop';
+import { loadDevelop, writeDevelop, SdkError } from './develop';
 import { refreshChanges, listSrcFolders, normalizeCloudMap, isNoFolderException } from './refresh';
 import { buildCommitPackage, commitCode, allocUuidWithUnderline } from './commit';
 import { addRelocateHistory, type RelocateProfile } from './relocate';
@@ -32,6 +32,8 @@ export interface BapSdkOptions {
   rpc: RpcInvoker;
   /** BAP 工程根目录（含 .develop）。 */
   workspaceRoot: string;
+  /** 工程稳定 ID（多工程）；会回填到 refresh 产出的 Change。 */
+  projectId?: string;
   /** 业务日志回调（宿主接到「BAP IDE」输出通道）。 */
   onLog?: (msg: string) => void;
   /** JDK 根目录（本地编译用其 javac，来自 bapIde.java8Path 设置项）。 */
@@ -115,6 +117,14 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
   const SNAP_TTL_MS = options.cloudSnapshotTtlMs ?? 30000;
   let cloudSnapshot: { t: number; data: Record<string, Record<string, FileDto | JavaDto>> } | null = null;
 
+  /** 连接单飞 + epoch：disconnect/redirect 后，旧连接请求返回的结果不再写回缓存。 */
+  let connectPromise: Promise<{ develop: DevelopConfig; session: SDto; projectUuid: string }> | null = null;
+  let epoch = 0;
+
+  /** 给变更补工程维度（多工程路由/虚拟 URI 隔离用）。 */
+  const tagChanges = (list: Change[]): Change[] =>
+    list.map((c) => ({ ...c, projectId: options.projectId, projectRoot: workspaceRoot }));
+
   async function fetchCloudSnapshot(
     projectUuid: string,
     force: boolean,
@@ -140,11 +150,32 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
   }
 
   async function ensureConnected(): Promise<{ develop: DevelopConfig; session: SDto; projectUuid: string }> {
-    if (!develop) develop = loadDevelop(workspaceRoot);
-    if (!session) {
-      session = await rpc.connect(develop.uri, develop.user, develop.pwd);
+    if (develop && session) return { develop, session, projectUuid: develop.projectUuid };
+    if (connectPromise) return connectPromise;
+
+    const myEpoch = epoch;
+    const promise = (async () => {
+      const d = loadDevelop(workspaceRoot);
+      const s = await rpc.connect(d.uri, d.user, d.pwd);
+      if (myEpoch !== epoch) {
+        // 连接期间发生过 disconnect/redirect：丢弃该会话，避免把旧 server 状态写回缓存。
+        try {
+          await rpc.disconnect();
+        } catch {
+          /* ignore */
+        }
+        throw new SdkError('连接期间 .develop 已变更，请重试', 'CONNECTION_SUPERSEDED');
+      }
+      develop = d;
+      session = s;
+      return { develop: d, session: s, projectUuid: d.projectUuid };
+    })();
+    connectPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (connectPromise === promise) connectPromise = null;
     }
-    return { develop, session, projectUuid: develop.projectUuid };
   }
 
   async function ensureProjectUuid(): Promise<string> {
@@ -164,7 +195,7 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       log('[refresh] 开始');
       const projectUuid = await ensureProjectUuid();
       const snapshot = await fetchCloudSnapshot(projectUuid, force);
-      const changes = await refreshChanges(projectUuid, srcRoot, rpc, snapshot);
+      const changes = tagChanges(await refreshChanges(projectUuid, srcRoot, rpc, snapshot));
       log(`[refresh] 完成，变更=${changes.filter((c) => c.status !== 'NORMAL').length}`);
       return changes;
     },
@@ -234,7 +265,7 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       async save(comment = '') {
         log('[code.save] 开始');
         const projectUuid = await ensureProjectUuid();
-        const changes = await refreshChanges(projectUuid, srcRoot, rpc);
+        const changes = tagChanges(await refreshChanges(projectUuid, srcRoot, rpc));
         const r = await doSave(projectUuid, changes, comment, rpc);
         log(`[code.save] 完成，提交文件=${changes.filter((c) => c.status !== 'NORMAL').length}`);
         return r;
@@ -333,10 +364,17 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
           adminTool: profile.adminTool,
         });
         addRelocateHistory(workspaceRoot, profile);
-        // 清 develop/session 缓存并断开远端，避免残留旧 server 状态；下次 refresh 重读新 .develop
-        await rpc.disconnect();
+        // 清 develop/session/快照，并递增 epoch：连接期间的旧结果不再写回；下次 refresh 重读新 .develop。
+        epoch++;
+        cloudSnapshot = null;
         session = null;
         develop = null;
+        try {
+          await rpc.disconnect();
+        } catch (e) {
+          // .develop 已写入成功，断开失败只记录，不阻断重定向结果。
+          log(`[redirect.apply] 断开旧连接失败（已忽略）: ${e instanceof Error ? e.message : String(e)}`);
+        }
         log('[redirect.apply] 完成');
       },
     },
@@ -455,9 +493,12 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
     },
 
     async disconnect() {
-      await rpc.disconnect();
+      // 递增 epoch：连接过程中发出的旧结果不再写回；清空快照与身份缓存。
+      epoch++;
+      cloudSnapshot = null;
       session = null;
       develop = null;
+      await rpc.disconnect();
     },
   };
 }

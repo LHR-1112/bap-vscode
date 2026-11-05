@@ -27,6 +27,8 @@ export class RpcClient {
   private _connectTimeoutMs: number;
   private _exitHandlers: Array<(code: number | null) => void> = [];
   private _progressHandlers: Array<(p: { percent: number; message: string }) => void> = [];
+  private _closed = false;
+  private _closing: Promise<void> | null = null;
 
   constructor(options: RpcClientOptions) {
     this._proc = new BridgeProcess(options.launch);
@@ -43,8 +45,14 @@ export class RpcClient {
     return this._proc.active;
   }
 
-  /** 懒启动：首次调用会 spawn Java 桥。 */
+  /** 已被 close/closeSync 关闭；关闭后任何请求都会抛 BRIDGE_CLOSED。 */
+  get closed(): boolean {
+    return this._closed;
+  }
+
+  /** 懒启动：首次调用会 spawn Java 桥。关闭后不再重启。 */
   private ensureStarted(): void {
+    if (this._closed) throw new BridgeRpcError('BRIDGE_CLOSED', 'RPC client has been closed');
     if (!this._proc.active) this._proc.start();
   }
 
@@ -89,21 +97,37 @@ export class RpcClient {
     return this._proc.request('ping', []) as Promise<boolean>;
   }
 
-  /** 断开连接（Java 桥进程不退出，可复用）。 */
+  /** 断开连接（Java 桥进程不退出，可复用）。已关闭时为空操作。 */
   async disconnect(): Promise<void> {
+    if (this._closed || !this._proc.active) return;
     await this._proc.request('disconnect', []);
   }
 
-  /** 彻底关闭：发 shutdown + 兜底 kill。 */
+  /** 彻底关闭：发 shutdown + 兜底 kill。幂等；重复调用复用同一次关闭。 */
   async close(): Promise<void> {
-    if (this._proc.active) {
-      try {
-        await this._proc.request('shutdown', [], 3000);
-      } catch {
-        // 可能已退出
+    if (this._closing) return this._closing;
+    this._closed = true;
+    this._closing = (async () => {
+      if (this._proc.active) {
+        try {
+          await this._proc.request('shutdown', [], 3000);
+        } catch {
+          // 可能已退出
+        }
       }
+      this._proc.kill();
+    })();
+    return this._closing;
+  }
+
+  /** 同步兜底关闭（VS Code deactivate 等无法 await 的场景）：直接 kill，不再等 shutdown。 */
+  closeSync(): void {
+    this._closed = true;
+    try {
+      this._proc.kill();
+    } catch {
+      /* ignore */
     }
-    this._proc.kill();
   }
 
   onExit(cb: (code: number | null) => void): void {

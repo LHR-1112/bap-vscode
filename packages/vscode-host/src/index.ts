@@ -30,9 +30,56 @@ export {
   sanitizeProjectDirName,
   resolveDownloadTargetDir,
   directoryHasEntries,
+  validateDownloadTarget,
 } from './backend-projects';
-export type { BackendProjectRoot, ScanOptions } from './backend-projects';
-export { discoverBackendProjects } from './backend-projects-vscode';
+export type {
+  BackendProjectRoot,
+  ScanOptions,
+  ValidateDownloadTargetOptions,
+  DownloadTargetValidation,
+} from './backend-projects';
+export { discoverBackendProjects, discoverBackendProjectDescriptors } from './backend-projects-vscode';
+
+// 多工程：发现 / 注册表 / 上下文 / 命令路由
+export { activateBackendProjects } from './projects/activate';
+export type { ActivateBackendProjectsOptions, ActivatedBackendProjects } from './projects/activate';
+export { buildProjectDescriptors, discoverProjectDescriptors } from './projects/discovery';
+export type { BackendProjectDescriptor } from './projects/discovery';
+export { BackendProjectRegistry } from './projects/project-registry';
+export type {
+  ProjectRequest,
+  ProjectResolution,
+  ProjectPicker,
+  ResolutionSource,
+  ResolveOptions,
+  ResolveManyOptions,
+} from './projects/project-registry';
+export { BackendProjectContext } from './projects/project-context';
+export type { ProjectSdkHandle, BackendProjectContextOptions, IdentityCheck } from './projects/project-context';
+export { RefreshScheduler } from './projects/refresh-scheduler';
+export { ProjectResolutionError, isProjectResolutionError, formatCandidates } from './projects/project-errors';
+export type { ProjectResolutionCode, ProjectCandidate } from './projects/project-errors';
+export {
+  pathKey,
+  isSamePath,
+  isPathInside,
+  projectRelativePath,
+  isInProjectSrc,
+  isIgnoredProjectPath,
+  deriveFullClass,
+  normalizeServerUri,
+  workspaceRelative,
+} from './projects/project-paths';
+export { readProjectIdentity, sameIdentity } from './projects/project-identity';
+export type { ProjectIdentity } from './projects/project-identity';
+export {
+  computeProjectId,
+  workspaceFolderSlug,
+  assignUniqueDisplayNames,
+  assignDuplicateFingerprints,
+} from './projects/project-id';
+export { registerProjectCommands } from './commands/command-router';
+export type { ProjectCommandOptions } from './commands/command-router';
 
 export { registerHistoryContentProvider } from './history/history-provider';
 export { openHistoryView, openHistoryDiff } from './history/history-view';

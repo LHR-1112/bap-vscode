@@ -17,13 +17,26 @@ const obj = (props: Record<string, unknown>, required: string[] = []): Record<st
 });
 const S = (d: string): Record<string, unknown> => ({ type: 'string', description: d });
 const B = (d: string): Record<string, unknown> => ({ type: 'boolean', description: d });
-// 每个工具：tool 名、对 AI 的描述、JSON Schema、落地命令、参数映射（只透传 __tool + 字段）
+
+/**
+ * 路由保留字段：M1 工具 schema 不暴露工程选择（M2/P1-7 才加 project 参数），
+ * 调用方若塞入这些字段一律丢弃，避免绕过命令路由把操作定向到别的工程。
+ */
+const ROUTING_KEYS = ['__tool', 'projectId', '__projectId', 'projectRoot', '__projectRoot', 'pid'];
+
+function sanitizeArgs(a: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...a };
+  for (const k of ROUTING_KEYS) delete out[k];
+  return out;
+}
+
+// 每个工具：tool 名、对 AI 的描述、JSON Schema、落地命令、参数映射（只透传 __tool + 业务字段）
 const T = (
   name: string,
   description: string,
   inputSchema: Record<string, unknown>,
   command: string,
-): IpTool => ({ name, description, inputSchema, command, toArgs: (a) => [{ __tool: true, ...a }] });
+): IpTool => ({ name, description, inputSchema, command, toArgs: (a) => [{ __tool: true, ...sanitizeArgs(a) }] });
 
 export const BAP_TOOLS: IpTool[] = [
   T('refresh', '比对本地与云端，重新计算变更列表（新增/修改/删除），返回非 NORMAL 变更数。', obj({}), 'bapIde.scm.refresh'),

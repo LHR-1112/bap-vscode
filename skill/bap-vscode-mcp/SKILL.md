@@ -32,6 +32,15 @@ description: 使用 BAP IDE（VS Code 插件）注册的 MCP server 对 BAP 云�
 
 若 AI 发现工具列表为空或调用报 `server not found`，先引导用户：打开含 `.develop` 的 BAP 工程目录（或包含后端子目录的 VotaForge 工作区）、确认插件已激活、重载窗口。
 
+## 多工程工作区
+
+- 一个窗口内可能有多个后端工程（每个含 `.develop`）；每个工程有独立的 SCM 与云端连接，互不影响。
+- MCP 工具名与参数与单工程相同，**暂不提供 `project` 参数**。插件按「活动编辑器所属工程 → 最近使用的工程 → 唯一工程」解析目标。
+- 无法唯一确定时，调用返回歧义错误并列出候选工程（displayName + projectId）。此时让用户在 VS Code 中打开/聚焦目标工程的文件，或先通过 SCM 对目标工程执行一次操作；不要盲目重试调用。
+- 批量操作（一次作用于多个工程）仅在 VS Code 界面提供；一次 MCP 调用只作用于一个工程。
+- 同一云端工程存在多份本地检出时，隐式写操作会被拒绝；调用 `commit` / `updateAll` / `redirect` 前应确认目标工程。
+- `downloadProject` 的目标目录不能是 vf 工作区根，也不能与已有后端工程重叠（详见工具文档）。
+
 ## 调用方式
 
 MCP 工具通过 **工具名 + 参数对象** 调用（不是 shell 命令）。一个 MCP 工具 ↔ 一个插件命令（`bapIde.*`），AI 面向工具名使用即可，无需知道底层命令。
@@ -62,7 +71,7 @@ MCP 工具通过 **工具名 + 参数对象** 调用（不是 shell 命令）。
 | [debugClass](./references/tools/debugClass.md) | 云端运行单个类 | `fullClass`, `code` |
 | [testProject](./references/tools/testProject.md) | 编译并运行单元测试 | `selectClass` |
 | [redirect](./references/tools/redirect.md) | 把当前工程重定向到另一 BAP 服务器（改写 `.develop` 并重连刷新） | `uri`, `user`, `pwd`, `projectUuid` |
-| [downloadProject](./references/tools/downloadProject.md) | 连接服务器并下载 BAP 工程到工作区（VotaForge 工作区默认落到 `<工作区>/<工程名>` 子目录） | `uri`, `user`, `pwd`, `projectUuid`, `projectName`(可选), `targetDir`(可选) |
+| [downloadProject](./references/tools/downloadProject.md) | 连接服务器并下载 BAP 工程到工作区（VotaForge 工作区默认落到 `<工作区>/<工程名>` 子目录；拒绝与已有工程重叠） | `uri`, `user`, `pwd`, `projectUuid`, `projectName`(可选), `targetDir`(可选) |
 | [listProjects](./references/tools/listProjects.md) | 登录后在当前环境列出可操作的项目列表 | `uri`, `user`, `pwd`(可选) |
 | [fetchCurrent](./references/tools/fetchCurrent.md) | 获取云端当前某个文件的内容 | `fullClass` 或 `path` |
 

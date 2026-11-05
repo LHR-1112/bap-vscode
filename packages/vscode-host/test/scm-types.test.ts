@@ -40,6 +40,13 @@ describe('scm/types 纯函数', () => {
     expect(groupToStatus('unknown')).toBeUndefined();
   });
 
+  it('groupToStatus 兼容多工程组 id（projectId 自身含冒号）', () => {
+    expect(groupToStatus('oa-a1b2c3d4:backend/gpf:added')).toBe('ADDED');
+    expect(groupToStatus('oa-a1b2c3d4:.:modified')).toBe('MODIFIED');
+    expect(groupToStatus('oa-a1b2c3d4:.:deleted')).toBe('DELETED_LOCALLY');
+    expect(groupToStatus('oa-a1b2c3d4:.:nope')).toBeUndefined();
+  });
+
   it('statusIconFile 返回 M/A/D 状态的 SVG 文件名', () => {
     expect(statusIconFile('MODIFIED')).toBe('status-modified.svg');
     expect(statusIconFile('ADDED')).toBe('status-added.svg');
@@ -68,6 +75,29 @@ describe('scm/types 纯函数', () => {
     expect(parsed.isResource).toBe(false);
     // pathname 是 encoded rel（含 / 前缀 bap/）
     expect(parsed.relativePath).toBe('com/foo/Bar.java');
+  });
+
+  it('bapOriginalUriSpec 带 projectId 时 query.pid 可反推', () => {
+    const spec = bapOriginalUriSpec('/ws', 'com/foo/Bar.java', 'core', false, 'oa-1:backend/gpf');
+    const u = new URL(spec);
+    const query: Record<string, string> = {};
+    u.searchParams.forEach((v, k) => (query[k] = v));
+    const parsed = parseBapOriginalUri(u.pathname, query);
+    expect(parsed.projectId).toBe('oa-1:backend/gpf');
+    expect(parsed.relativePath).toBe('com/foo/Bar.java');
+    expect(parsed.folder).toBe('core');
+  });
+
+  it('parseBapOriginalUri 兼容 res=1 旧 URI', () => {
+    const q = new URLSearchParams();
+    q.set('folder', 'res');
+    q.set('res', '1');
+    q.set('rel', 'a/b.txt');
+    q.set('pid', 'p1');
+    const parsed = parseBapOriginalUri('/bap/a%2Fb.txt', Object.fromEntries(q.entries()));
+    expect(parsed.isResource).toBe(true);
+    expect(parsed.projectId).toBe('p1');
+    expect(parsed.relativePath).toBe('a/b.txt');
   });
 
   it('parseBapOriginalUri 资源/路径正确', () => {

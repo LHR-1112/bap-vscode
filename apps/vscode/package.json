@@ -175,12 +175,14 @@
         "bapIde.java8Path": {
           "type": "string",
           "default": "",
-          "description": "JDK 1.8 安装路径。下载工程后会写入 .vscode/settings.json（java.configuration.runtimes）。留空则自动检测。"
+          "scope": "resource",
+          "description": "JDK 1.8 安装路径（可按工程文件夹覆盖）。下载工程后会写入 .vscode/settings.json（java.configuration.runtimes）。留空则自动检测。"
         },
         "bapIde.refreshTtlMs": {
           "type": "number",
           "default": 30000,
-          "description": "自动刷新复用云端快照的间隔（毫秒）。此间隔内的自动刷新不重新查询云端，只做本地比对；手动刷新始终强制拉取云端。默认 30000。"
+          "scope": "resource",
+          "description": "自动刷新复用云端快照的间隔（毫秒，可按工程文件夹覆盖）。此间隔内的自动刷新不重新查询云端，只做本地比对；手动刷新始终强制拉取云端。默认 30000。"
         },
         "bapIde.updateFeedUrl": {
           "type": "string",
@@ -199,173 +201,173 @@
         {
           "command": "bapIde.scm.refresh",
           "group": "navigation@1",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.updateAll",
           "group": "navigation@2",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.commit",
           "group": "navigation@3",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.publish",
           "group": "navigation@4",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.redirect",
           "group": "navigation@5",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.projectHistory",
           "group": "navigation@6",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.updateLibs",
           "group": "navigation@7",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.refresh",
           "group": "2_main@1",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.updateAll",
           "group": "2_main@2",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.commit",
           "group": "2_main@3",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.publish",
           "group": "2_main@4",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.redirect",
           "group": "2_main@5",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.projectHistory",
           "group": "2_main@6",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.updateLibs",
           "group": "2_main@7",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.compileProject",
           "group": "2_main@8",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         }
       ],
       "scm/resourceState/context": [
         {
           "command": "bapIde.scm.openFile",
           "group": "inline@1",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.updateFile",
           "group": "inline@2",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.commitFile",
           "group": "inline@3",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.fileHistory",
           "group": "inline@4",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.openDiff",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.openFile",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.updateFile",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.commitFile",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.fileHistory",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.compileFile",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.debugClass",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         },
         {
           "command": "bapIde.scm.testProject",
           "group": "navigation",
-          "when": "scmProvider == bap"
+          "when": "scmProvider =~ /^bap($|:)/"
         }
       ],
       "scm/resourceGroup/context": [
         {
           "command": "bapIde.scm.openAllChanges",
           "group": "inline@1",
-          "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
+          "when": "scmProvider =~ /^bap($|:)/ && scmResourceGroup =~ /(^|:)(added|modified|deleted)$/"
         },
         {
           "command": "bapIde.scm.updateGroup",
           "group": "inline@2",
-          "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
+          "when": "scmProvider =~ /^bap($|:)/ && scmResourceGroup =~ /(^|:)(added|modified|deleted)$/"
         },
         {
           "command": "bapIde.scm.commitGroup",
           "group": "inline@3",
-          "when": "scmProvider == bap && (scmResourceGroup == added || scmResourceGroup == modified || scmResourceGroup == deleted)"
+          "when": "scmProvider =~ /^bap($|:)/ && scmResourceGroup =~ /(^|:)(added|modified|deleted)$/"
         }
       ],
       "editor/context": [
         {
           "command": "bapIde.scm.compileFile",
           "group": "compile@1",
-          "when": "resourceLangId == java"
+          "when": "resourceLangId == java && bapIde.hasBackendProject"
         },
         {
           "command": "bapIde.scm.debugClass",
           "group": "compile@1",
-          "when": "resourceLangId == java"
+          "when": "resourceLangId == java && bapIde.hasBackendProject"
         },
         {
           "command": "bapIde.scm.testProject",
           "group": "compile@1",
-          "when": "resourceLangId == java"
+          "when": "resourceLangId == java && bapIde.hasBackendProject"
         }
       ]
     }

@@ -123,7 +123,10 @@ async function dispatch(socket: net.Socket, line: string, ipc: HostIpc, log: { d
       if (!tool) { write(socket, { type: 'invoke', id: msg.id, error: `unknown tool: ${msg.name}` }); return; }
       const args = tool.toArgs ? tool.toArgs(msg.args ?? {}) : [];
       const result = await vscode.commands.executeCommand(tool.command, ...args);
-      write(socket, { type: 'invoke', id: msg.id, result });
+      // 命令的交互式错误约定是返回 { error }（不抛异常）；MCP 调用方需要真实错误。
+      const cmdError = extractCommandError(result);
+      if (cmdError) write(socket, { type: 'invoke', id: msg.id, error: cmdError });
+      else write(socket, { type: 'invoke', id: msg.id, result });
     } else {
       write(socket, { type: 'error', id: msg.id, error: `unknown request: ${msg.type}` });
     }
@@ -135,6 +138,13 @@ async function dispatch(socket: net.Socket, line: string, ipc: HostIpc, log: { d
 
 function toToolDef(t: IpTool): ToolDef {
   return { name: t.name, description: t.description, inputSchema: t.inputSchema };
+}
+
+/** 命令以 `{ error: string }` 形式报告失败时，返回该错误文本。 */
+function extractCommandError(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return undefined;
+  const err = (result as { error?: unknown }).error;
+  return typeof err === 'string' && err ? err : undefined;
 }
 
 function write(socket: net.Socket, obj: unknown): void {

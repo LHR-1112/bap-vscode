@@ -9,6 +9,7 @@ import {
   sanitizeProjectDirName,
   resolveDownloadTargetDir,
   directoryHasEntries,
+  validateDownloadTarget,
 } from '../src/backend-projects';
 
 let tmp: string;
@@ -175,5 +176,54 @@ describe('directoryHasEntries', () => {
 
     fs.writeFileSync(path.join(empty, 'a.txt'), 'x');
     expect(directoryHasEntries(empty)).toBe(true);
+  });
+});
+
+describe('validateDownloadTarget', () => {
+  it('工作区内新目录：返回 destDir 且 existsNonEmpty=false', () => {
+    const r = validateDownloadTarget(tmp, path.join(tmp, 'new-project'));
+    expect(r.destDir).toBe(path.join(tmp, 'new-project'));
+    expect(r.existsNonEmpty).toBe(false);
+  });
+
+  it('已存在且非空的目录：existsNonEmpty=true（由调用方决定确认/拒绝）', () => {
+    const dir = path.join(tmp, 'occupied');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
+    expect(validateDownloadTarget(tmp, dir).existsNonEmpty).toBe(true);
+  });
+
+  it('拒绝工作区外的目标', () => {
+    expect(() => validateDownloadTarget(tmp, path.join(tmp, '..', 'outside'))).toThrow(/工作区内/);
+  });
+
+  it('vf 工作区拒绝落到工作区根', () => {
+    fs.writeFileSync(path.join(tmp, 'votaforge.workspace.json'), '{}', 'utf8');
+    expect(() => validateDownloadTarget(tmp, tmp, { vf: true })).toThrow(/子目录/);
+  });
+
+  it('拒绝目标为文件、目标自身已是工程', () => {
+    const file = path.join(tmp, 'a.txt');
+    fs.writeFileSync(file, 'x');
+    expect(() => validateDownloadTarget(tmp, file)).toThrow(/文件/);
+
+    const proj = mkProject(path.join(tmp, 'existing'));
+    expect(() => validateDownloadTarget(tmp, proj)).toThrow(/已是后端工程/);
+  });
+
+  it('拒绝与已有工程重叠：目标包含工程 / 目标位于工程内', () => {
+    const proj = mkProject(path.join(tmp, 'existing'));
+    expect(() =>
+      validateDownloadTarget(tmp, tmp, { existingProjectRoots: [proj] }),
+    ).toThrow(/包含已有后端工程/);
+    expect(() =>
+      validateDownloadTarget(tmp, path.join(proj, 'sub'), { existingProjectRoots: [proj] }),
+    ).toThrow(/位于已有后端工程内/);
+  });
+
+  it('同级新目录不受已有工程影响', () => {
+    const proj = mkProject(path.join(tmp, 'existing'));
+    const r = validateDownloadTarget(tmp, path.join(tmp, 'another'), { existingProjectRoots: [proj] });
+    expect(r.destDir).toBe(path.join(tmp, 'another'));
   });
 });
