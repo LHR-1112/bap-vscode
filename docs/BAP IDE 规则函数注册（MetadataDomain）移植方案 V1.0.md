@@ -1,6 +1,7 @@
-# BAP IDE 规则函数注册（MetadataDomain）移植方案 V1.0
+# BAP IDE 规则函数注册（MetadataDomain）移植方案 V1.1
 
-> 状态：待实施（方案已完成可行性核验与对抗式复核）
+> 状态：待实施（2026-11-09 按用户确认的域来源简化）
+> 版本：标题 V1.1；文件名保留 `...V1.0.md`，以维持既有链接与提交记录。
 > 日期：2026-11-09
 > 参考实现：`/Users/lihongrui/IdeaProjects/PluginDemo`（IDEA 版插件）
 > 适用仓库：BAP IDE（VS Code）插件（VotaForge_BAP 后端工程插件）
@@ -8,7 +9,16 @@
 
 **仓库根**：仓库根目录（本文档中的仓库内路径均相对仓库根）
 **参考实现**：`/Users/lihongrui/IdeaProjects/PluginDemo`
-**结论**：可行，无设计级阻塞。IDEA 的 `RegisterClassRuleFunctionsAction` / `RegisterMethodRuleFunctionAction` 依赖的 `cell.panelxpro.metadata.IPanelMetadataService` 是独立 CRPC 服务；本插件 Java 桥已有的 `com.leavay.nio.crpc` runtime 完全够用，不需要新增 npm 依赖，也不需要改 VotaForge 协议。真正的前置条件是三件事：Java 桥新增 metadata 通道、DTO 序列化与服务器严格一致、`.develop` 的 `MetadataDomain` 闭环。三者落地后，UI 与 MCP 可共用同一套 SDK。
+**结论**：可行，无设计级阻塞。IDEA 的 `RegisterClassRuleFunctionsAction` / `RegisterMethodRuleFunctionAction` 依赖的 `cell.panelxpro.metadata.IPanelMetadataService` 是独立 CRPC 服务；本插件 Java 桥已有的 `com.leavay.nio.crpc` runtime 完全够用，不需要新增 npm 依赖，也不需要改 VotaForge 协议。前置条件收敛为两件事：Java 桥新增 metadata 通道、DTO 序列化与服务器严格一致。`MetadataDomain` 直接取 VotaForge `server-profiles.json` 当前 profile 的 `busDomainCode`（用户已确认二者等价），**不写 `.develop`**；无 VF 配置时才回退到 `.develop` 只读值 / `listDomains()` 选择。两者落地后，UI 与 MCP 共用同一套 SDK。
+
+---
+
+## 0. 2026-11-09 方案简化（本版核心决策）
+
+1. **`MetadataDomain` 就是 VotaForge `server-profiles.json` 当前 profile 的 `busDomainCode`**。用户已确认二者等价；注册时直接读取并作为 `domainCode` 传给 `IPanelMetadataService`，不再把它当“仅提示”。
+2. **绝不写 `.develop`**。删除 `updateDevelopMetadataDomain`、`sdk.metadata.setDomain`、`Switch Metadata Domain` 命令、下载时的域参数，以及 Java 侧 `.develop` 域写入。`.develop` 的 `MetadataDomain` 只作为旧配置的**只读回退**保留。
+3. 域解析优先级：MCP 显式 `domainCode` > VF active profile `busDomainCode` > `.develop` 只读值 > `listDomains()` + QuickPick（UI，仅本会话缓存）/ 报错并返回候选（MCP）。
+4. 本版简化取代下文所有“busDomainCode 仅为提示”“选中后写回 `.develop`”“switchDomain 命令”“下载前选域”的旧表述；下文对应章节已同步改写。
 
 ---
 
@@ -41,7 +51,7 @@
 | `packages/java-bridge/src/main/java/octo/cm/ruleengine/RuleFunctionMeta.java` | 新增 | `ruleCode/nameSpace/name/tag/description/codePath/invokeMethod/inputParamMetas/returnType/useCase/customLabels` |
 | `packages/java-bridge/src/main/java/octo/cm/ruleengine/InputParamMeta.java` | 新增 | `name/type/desc/nullable` |
 | `packages/java-bridge/src/main/java/com/bap/dev/service/MetadataRpcClient.java` | 新增 | 第二个 `CRpcClientWrapper<IPanelMetadataService>`，不登录 |
-| `packages/java-bridge/src/main/java/com/bap/dev/BridgeMain.java` | 修改 | `metadata` 顶层方法、生命周期、`writeErr` JSON 转义、`download` 可选域参数与 XML 转义 |
+| `packages/java-bridge/src/main/java/com/bap/dev/BridgeMain.java` | 修改 | `metadata` 顶层方法、生命周期、`writeErr` JSON 转义；**不增加 `download` 域参数，不写 `.develop` 域** |
 | `packages/java-bridge/scripts/build.sh` | 修改 | 递归编译全部 Java、清理 `out/`、UTF-8、argfile |
 
 **RPC 包（修改 2）**
@@ -51,36 +61,35 @@
 | `packages/rpc/src/types.ts` | 修改 | `BridgeMethod` 补 `'download'`、`'metadata'` |
 | `packages/rpc/src/index.ts` | 修改 | 可选：`metadataConnect/metadataCall/metadataDisconnect/metadataPing` 门面方法 |
 
-**SDK（新增 1，修改 5）**
+**SDK（新增 1，修改 4）**
 
 | 文件 | 动作 | 内容 |
 |---|---|---|
-| `packages/sdk/src/types.ts` | 修改 | `DevelopConfig.metadataDomain?`；metadata DTO 类型 |
-| `packages/sdk/src/develop.ts` | 修改 | 解析 `MetadataDomain`；新增 `updateDevelopMetadataDomain`；`writeDevelop` 改为原地补丁 |
+| `packages/sdk/src/types.ts` | 修改 | `DevelopConfig.metadataDomain?`（只读兼容）；metadata DTO 类型 |
+| `packages/sdk/src/develop.ts` | 修改 | 解析 `MetadataDomain`（只读回退）；`writeDevelop` 保留已有 `MetadataDomain`，绝不新增 |
 | `packages/sdk/src/metadata.ts` | 新增 | metadata 请求封装、超时、错误映射、DTO 校验 |
 | `packages/sdk/src/services.ts` | 修改 | `BapSdk.metadata` 命名空间；`ensureMetadataConnected`；redirect/disconnect 清理 |
 | `packages/sdk/src/index.ts` | 修改 | 导出 metadata 类型与函数 |
-| `packages/sdk/src/download.ts` | 修改 | 可选 `metadataDomain` 参数，传给 Java `download` |
 
 **宿主与扩展（新增 2，修改 4～6）**
 
 | 文件 | 动作 | 内容 |
 |---|---|---|
-| `packages/vscode-host/src/projects/server-profiles.ts` | 新增 | 只读 `readActiveBusDomainCode(vfRoot)`，仅作 QuickPick 提示 |
+| `packages/vscode-host/src/projects/server-profiles.ts` | 新增 | 只读 `readActiveBusDomainCode(vfRoot)`；作为 MetadataDomain 权威来源 |
 | `packages/vscode-host/src/java-source.ts` | 新增 | 纯函数：包名、全类名、方法名校验、嵌套类拼接（可单测） |
-| `packages/vscode-host/src/commands/command-router.ts` | 修改 | 3 个命令、域选择、编辑器/方法解析、`ctx.runWrite`/`runExclusive` |
+| `packages/vscode-host/src/commands/command-router.ts` | 修改 | 2 个命令、域解析、编辑器/方法解析、`ctx.runWrite`/`runExclusive` |
 | `packages/vscode-host/src/mcp/tools.ts` | 修改（P1） | 2 个 MCP 工具目录项 |
 | `packages/vscode-host/src/mcp/tool-exec.ts` | 修改（P1） | 2 个工具执行分支 + 域解析 |
 | `packages/vscode-host/src/agent/agent-instructions.ts` | 修改 | 工具数量与两条工具说明 |
-| `apps/vscode/package.json` | 修改 | 3 个命令、菜单、可选 SCM 标题 |
-| `apps/vscode/src/extension.ts` | 修改 | classpath 顺序；下载完成后提示切换域 |
+| `apps/vscode/package.json` | 修改 | 2 个命令、菜单 |
+| `apps/vscode/src/extension.ts` | 修改 | classpath 顺序 |
 
 **测试与文档**
 
 | 文件 | 动作 |
 |---|---|
-| `packages/sdk/test/develop.test.ts` | 修改：MetadataDomain 解析/回写 |
-| `packages/sdk/test/metadata.test.ts` | 新增：协议、超时、错误、域解析 |
+| `packages/sdk/test/develop.test.ts` | 修改：MetadataDomain 解析与保留 |
+| `packages/sdk/test/metadata.test.ts` | 新增：协议、超时、错误、只读域回退 |
 | `packages/vscode-host/test/server-profiles.test.ts` | 新增 |
 | `packages/vscode-host/test/java-source.test.ts` | 新增 |
 | `packages/vscode-host/test/mcp-tools.test.ts` | 修改：动态数量 + 新工具 |
@@ -98,12 +107,12 @@
 
 | 阶段 | 内容 | 人日 |
 |---|---|---|
-| P0 | Java metadata 通道 + DTO + build；SDK `.develop`/metadata；宿主 3 个命令；单测；文档 | 3.0～4.5 |
-| P1 | MCP 2 个工具；下载时域选择；SCM 标题菜单；技能文档 | 1.0～1.5 |
+| P0 | Java metadata 通道 + DTO + build；SDK metadata + `.develop` 只读兼容；宿主 2 个命令；单测；文档 | 2.5～4.0 |
+| P1 | MCP 2 个工具；工具/技能文档计数 | 0.5～1.0 |
 | 联调 | 真实服务器 `listDomains`、注册、DTO 版本差异排查 | 0.5～1.5 |
-| **合计** | 不含 MCP 约 3～5 人日；含 MCP 约 4.5～7 人日 | |
+| **合计** | 不含 MCP 约 3～5 人日；含 MCP 约 3.5～6 人日 | |
 
-代码量：Java 约 700～900 行（大部分是逐字复制的 DTO）；TS 约 900～1200 行（含测试）。
+代码量：Java 约 650～850 行（大部分是逐字复制的 DTO）；TS 约 750～1050 行（含测试）。
 
 ---
 
@@ -113,8 +122,8 @@
 
 ```text
 VS Code 命令 / MCP tool
-  → vscode-host（解析工程、选域、串行执行、身份校验）
-    → @bap/sdk（metadata 命名空间、.develop 读写）
+  → vscode-host（解析工程、从 VF/`.develop` 解析域、串行执行、身份校验）
+    → @bap/sdk（metadata 命名空间；`.develop` 仅只读回退）
       → @bap/rpc（request('metadata', ...) / request('download', ...)）
         → Java BridgeMain（单进程、单线程、stdin/stdout JSON）
           → MetadataRpcClient（第二个 CRpcClientWrapper<IPanelMetadataService>）
@@ -155,8 +164,8 @@ export type BridgeMethod = 'connect' | 'call' | 'download' | 'disconnect' | 'pin
 | 操作 | TS 侧超时 | Java `setTempTimeout` | 说明 |
 |---|---|---|---|
 | `metadata connect` | 180 s | 不设置（`openService` 自身默认） | 首次生成代理/探测服务 |
-| `listDomains` | 120 s | 120 000 ms | 服务器可能查询元数据 |
-| `listFunctions` | 120 s | 120 000 ms | 同上 |
+| `listDomains` | 150 s | 120 000 ms | 服务器可能查询元数据；TS 必须大于 Java |
+| `listFunctions` | 150 s | 120 000 ms | 同上 |
 | `registerFunction` | 12 min | 600 000 ms | 服务端扫描类/方法 |
 | `registerFunctions` | 12 min | 600 000 ms | 扫描全部方法 |
 | `metadata ping/disconnect` | 15 s / 10 s | 不设置 | |
@@ -174,7 +183,7 @@ export type BridgeMethod = 'connect' | 'call' | 'download' | 'disconnect' | 'pin
 | `METADATA_SERVICE_UNAVAILABLE` | 服务端未暴露 `IPanelMetadataService` / 账号无权 | 确认服务器启用 panelxpro 元数据服务、账号权限 |
 | `METADATA_RPC_FAILED` | 其它传输/远程异常 | 原样包含远端异常名与消息 |
 | `METADATA_BAD_RESPONSE` | 返回不是预期对象/数组 | 记录形状（不含密码），提示服务端版本不一致 |
-| `METADATA_DOMAIN_INVALID` | 域 code 为空/含控制字符/非法 XML 字符 | 重新选择业务域 |
+| `METADATA_DOMAIN_INVALID` | 域 code 为空/含控制字符 | 检查 VF `server-profiles.json` 的 `busDomainCode` 或重新选择业务域 |
 
 `BridgeRpcError` 的 `code` 即 Java 错误 `name`；`message` 形如 `name: message`。SDK 映射时保留原名，便于排障。
 
@@ -279,7 +288,7 @@ public class MetadataRpcClient {
 说明：
 
 - `connect` 不调用登录；会话由 `BapRpcClient.login` 写入 `CRpcAdapter.setGlobalContext(CDaoConst.CTX_SESSION, session)`。
-- `getIntf(true)` 会缓存 `_intf`；首次调用触发 `openService`，后续廉价。桥内 `metadata.connect` 主动调用一次 `getService()`，把服务不可用错误提前到连接阶段。
+- `getIntf(true)` 会缓存 `_intf`；首次调用触发 `openService`，后续廉价。但 `openService` 只编译本地代理、不发远程包；桥内 `metadata.connect` 主动调用一次 `getService().ping()`，把服务不可用错误提前到连接阶段。
 - 不要调用 `CRpcAdapter.closeRemoteClient()`；不要在主连接断开时关闭共享 client。只 `rpcWrapper.shutdown()`。
 
 #### 3.1.3 `BridgeMain.java`
@@ -342,7 +351,7 @@ private static void handleMetadata(BapRpcClient client, Req req) throws Exceptio
             MetadataRpcClient m = new MetadataRpcClient();
             try {
                 m.connect(uri, user, pwd);
-                m.getService(); // 提前探测服务，失败即报错
+                m.getService().ping(); // getService 只建本地代理；ping 才是真实远端探测
                 metadata = m;
             } catch (Throwable t) {
                 try { m.shutdown(); } catch (Throwable ignore) { }
@@ -423,25 +432,7 @@ private static void writeErr(long id, String name, String message) {
 }
 ```
 
-`download` 分支的 `writeOk(req.id, "{\"destDir\":\"" + destDir + "\"}")` 改为 `GSON.toJson(destDir)`。`.develop` 生成改为统一 XML 转义，并支持可选第 4 参数：
-
-```java
-String domain = str(req.params, 3); // 可空；来自 SDK/UI 的 MetadataDomain
-...
-StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<Development");
-xml.append(" Project=\"").append(xmlAttr(uuid)).append("\"")
-   .append(" Uri=\"").append(xmlAttr(client.getUri())).append("\"")
-   .append(" AdminTool=\"").append(xmlAttr(at)).append("\"")
-   .append(" User=\"").append(xmlAttr(client.getUser())).append("\"")
-   .append(" Password=\"").append(xmlAttr(client.getPwd())).append("\"")
-   .append(" LocalNioPort=\"-1\"");
-if (domain != null && !domain.trim().isEmpty()) {
-    xml.append(" MetadataDomain=\"").append(xmlAttr(domain.trim())).append("\"");
-}
-xml.append("/>");
-```
-
-`xmlAttr` 为 `& < > " '` 的最小转义。注意属性顺序：`MetadataDomain` 放在最后，与 IDEA 的写法兼容（IDEA 用 `replaceFirst("/>", " MetadataDomain=\"...\"/>")`，位置在末尾）。
+`download` 分支的 `writeOk(req.id, "{\"destDir\":\"" + destDir + "\"}")` 改为 `GSON.toJson(destDir)`（现有 JSON 转义缺陷）。**不再给 `download` 增加域参数，也不在 Java 侧写 `MetadataDomain`**：域由 VotaForge `server-profiles.json` 在运行时提供，`.develop` 不参与域写入。
 
 #### 3.1.4 `build.sh`
 
@@ -548,7 +539,7 @@ export interface DevelopConfig {
   pwd: string;
   adminTool?: string;
   localNioPort?: string;
-  /** BAP MetadataDomain；缺失时不猜测，注册前由宿主引导选择。 */
+  /** 只读兼容：旧 .develop 可能由 IDEA 写入；本插件绝不写。 */
   metadataDomain?: string;
 }
 
@@ -591,14 +582,6 @@ export interface ListFunctionsResult {
   errorFunctions?: Record<string, string>;
   totalCount?: number;
 }
-
-export interface MetadataDomainResolution {
-  /** .develop 已配置的域；没有则为 undefined。 */
-  domainCode?: string;
-  /** 服务器返回的候选；已配置时为空数组（不发起 RPC）。 */
-  candidates: DomainInfoDto[];
-  source: 'develop' | 'unconfigured';
-}
 ```
 
 `RpcInvoker.request` 已经是可选方法，无需改动。
@@ -630,64 +613,17 @@ const KEY_MAP: Record<string, keyof DevelopConfig> = {
 if (key === 'metadataDomain' && !value.trim()) continue;
 ```
 
-新增：
+**不做写回。** 本版只保留两项只读兼容：
 
 ```ts
-export function updateDevelopMetadataDomain(workspaceRoot: string, domainCode: string): void;
+// ATTR_RE / KEY_MAP 增加 MetadataDomain（大小写不敏感），仅供 loadDevelop 读取。
+export interface DevelopConfig { /* ... */ metadataDomain?: string; }
 ```
 
-行为：
-
-1. 校验 `domainCode`（trim、非空、无控制字符、无 `< > & " '`；非法抛 `SdkError(..., 'METADATA_DOMAIN_INVALID')`）。
-2. 读取 `.develop`；不存在抛 `MISSING_DEVELOP`。
-3. 格式识别：
-   - 有 `<entry ...>`：按 entry-key 格式补丁；key 为 `MetadataDomain`（大小写不敏感）时替换值；没有则在 `</properties>` 前插入 `<entry key="MetadataDomain">...</entry>`。
-   - 有根标签：用引号感知扫描找到第一个元素开始标签的 `>`（不是 `replaceFirst("/>")`，IDEA 的写法可能命中子标签），在 `/>` 或 `>` 前替换/插入 `MetadataDomain="..."`。
-4. 原子写回：同目录临时文件 + `fs.renameSync`；POSIX 下 `chmod 0600`。
-5. 不破坏注释、未知属性、缩进和换行风格（尽量只替换目标片段）。
-
-`writeDevelop` 改为“原地补丁”，签名：
-
-```ts
-export function writeDevelop(
-  workspaceRoot: string,
-  cfg: {
-    projectUuid: string;
-    uri: string;
-    user: string;
-    pwd: string;
-    adminTool?: string;
-    localNioPort?: string;
-    /** undefined=保留原值；null=删除；string=写入 */
-    metadataDomain?: string | null;
-  },
-): void;
-```
-
-语义：
-
-- 文件存在且可识别：补丁已知字段（`Project/Uri/User/Password/AdminTool/LocalNioPort/MetadataDomain`），未知属性/注释保留。
-- 文件不存在：生成现有单标签属性格式；`adminTool` 缺省 `bap.client.BapMainFrame`，`localNioPort` 缺省 `-1`。
-- 文件存在但格式无法识别：抛 `CONFIG_INCOMPLETE`，不要用全量重写覆盖用户文件。
-- `metadataDomain`：`undefined` 不碰；`null` 删除；字符串写入（XML 转义）。
-- `localNioPort` 不再硬编码 `-1`，优先 `cfg.localNioPort`，其次原值，最后 `-1`。
-
-`redirect.apply` 的域策略（`packages/sdk/src/services.ts`）：
-
-```ts
-const old = (() => { try { return loadDevelop(workspaceRoot); } catch { return undefined; } })();
-const keepDomain = old && sameServerUri(old.uri, profile.uri) ? old.metadataDomain : null;
-writeDevelop(workspaceRoot, {
-  projectUuid: profile.projectUuid,
-  uri: profile.uri,
-  user: profile.user,
-  pwd: profile.pwd,
-  adminTool: profile.adminTool,
-  metadataDomain: keepDomain, // 同服务器保留；换服务器清空
-});
-```
-
-`sameServerUri` 用最小归一化（trim、去尾部 `/`、小写 scheme/host）比较即可；不要引入 URL 第三方库。
+- `MetadataDomain` 为空/缺失 → `undefined`，不参与域解析。
+- `writeDevelop` 保持现有“单标签属性格式”重写逻辑，但**保留原文件已有的 `MetadataDomain`**：写前尝试 `loadDevelop` 读取旧值，若有则在生成的根标签末尾追加 `MetadataDomain="..."`；绝不新增、绝不删除、绝不清空。这样 `redirect` 不会擦掉 IDEA 写入的值。
+- `writeDevelop` 不再接受 `metadataDomain` 参数，也不做原地补丁；本版没有 `updateDevelopMetadataDomain`。
+- `redirect.apply` **不主动管理域**：域解析每次注册时从 VF `server-profiles.json` 重新读取；`.develop` 的旧值由 `writeDevelop` 的通用保留逻辑兜底，避免被重定向流程擦掉。
 
 #### 3.3.3 `packages/sdk/src/metadata.ts`（新增）
 
@@ -696,11 +632,11 @@ import type { JsonValue } from '@bap/rpc';
 import { SdkError } from './develop';
 import type {
   DevelopConfig, DomainInfoDto, ListFunctionsResult,
-  MetadataDomainResolution, RegisterFunctionResult, RpcInvoker,
+  RegisterFunctionResult, RpcInvoker,
 } from './types';
 
 export const METADATA_CONNECT_TIMEOUT_MS = 180_000;
-export const METADATA_READ_TIMEOUT_MS = 120_000;
+export const METADATA_READ_TIMEOUT_MS = 150_000;
 export const METADATA_REGISTER_TIMEOUT_MS = 12 * 60_000;
 export const METADATA_PING_TIMEOUT_MS = 15_000;
 export const METADATA_DISCONNECT_TIMEOUT_MS = 10_000;
@@ -727,7 +663,7 @@ async function metadataRequest(
     if (name.includes('unknown_method') || name.includes('BRIDGE_CLOSED')) {
       throw new SdkError(`Java 桥不支持元数据调用（${name}），请重新构建并重装扩展`, 'METADATA_UNAVAILABLE', e);
     }
-    if (/IPanelMetadataService|NoService|ServiceNotFound|not\s+found/i.test(message)) {
+    if (/IPanelMetadataService|NoServiceSupport|NoService|ServiceNotFound/i.test(message)) {
       throw new SdkError(`服务器未启用元数据服务或账号无权限：${message}`, 'METADATA_SERVICE_UNAVAILABLE', e);
     }
     throw new SdkError(`元数据调用失败（${op}）：${message}`, 'METADATA_RPC_FAILED', e);
@@ -776,7 +712,7 @@ export async function registerMetadataFunctions(
 export function validateMetadataDomainCode(code: string): string {
   const s = (code ?? '').trim();
   if (!s) throw new SdkError('业务域 code 不能为空', 'METADATA_DOMAIN_INVALID');
-  if (/[<>&"'\u0000-\u001f]/.test(s)) {
+  if (/[\u0000-\u001f\u007f]/.test(s)) {
     throw new SdkError(`业务域 code 含非法字符：${s}`, 'METADATA_DOMAIN_INVALID');
   }
   return s;
@@ -796,17 +732,16 @@ export function validateMetadataDomainCode(code: string): string {
 
 ```ts
 metadata: {
-  /** 从 .develop 读取；不发起 RPC，不隐式猜测。 */
+  /** 旧 .develop 的只读回退；不发起 RPC，不写文件。 */
   configuredDomain(): string | undefined;
-  /** 已配置则返回 develop；否则调 listDomains 返回候选。 */
-  resolveDomain(opts?: { refresh?: boolean }): Promise<MetadataDomainResolution>;
   listDomains(opts?: { refresh?: boolean }): Promise<DomainInfoDto[]>;
-  setDomain(code: string): Promise<void>;
   listFunctions(domain: string): Promise<ListFunctionsResult>;
   registerFunction(domain: string, fullClass: string, methodName: string): Promise<RegisterFunctionResult>;
   registerFunctions(domain: string, fullClass: string): Promise<RegisterFunctionResult>;
 };
 ```
+
+**域解析不在 SDK 内做**：VF `server-profiles.json` 的定位需要 workspace folder，属于宿主层；SDK 只提供 `configuredDomain()` 这个只读回退和服务器候选列表。
 
 内部状态：
 
@@ -847,24 +782,13 @@ configuredDomain() {
 }
 ```
 
-`setDomain()`：
+本版没有 `setDomain()` / `resolveDomain()`：不写 `.develop`，也不在 SDK 里合并 VF 配置。域解析由宿主 `command-router` / MCP `tool-exec` 按 §4 的优先级完成。
+
+`listDomains()`：
 
 ```ts
-async setDomain(code: string) {
-  const value = validateMetadataDomainCode(code);
-  updateDevelopMetadataDomain(workspaceRoot, value);
-  if (develop) develop.metadataDomain = value;
-  log(`[metadata.setDomain] domain=${value}`);
-}
-```
-
-`resolveDomain()`：
-
-```ts
-async resolveDomain(opts) {
-  const configured = this.configuredDomain(); // 或闭包函数
-  if (configured) return { domainCode: configured, candidates: [], source: 'develop' };
-  return { candidates: await listDomainsImpl(opts?.refresh ?? false), source: 'unconfigured' };
+async listDomains(opts) {
+  return listDomainsImpl(opts?.refresh ?? false);
 }
 ```
 
@@ -885,7 +809,7 @@ async registerFunction(domain, fullClass, methodName) {
 
 `redirect.apply`：
 
-- 调用 `writeDevelop` 时带 `metadataDomain` 策略（见 3.3.2）。
+- **不管理域**：不再调用 `writeDevelop` 传 `metadataDomain`；`.develop` 的旧值由 `writeDevelop` 的通用保留逻辑兜底（见 3.3.2）。
 - `epoch++`、`cloudSnapshot = null`、`session = null`、`develop = null` 后，加 `metadataEpoch = -1; domainCache = null;`。
 
 `disconnect()`：
@@ -899,7 +823,7 @@ async registerFunction(domain, fullClass, methodName) {
 导出：
 
 ```ts
-export { loadDevelop, writeDevelop, updateDevelopMetadataDomain, SdkError } from './develop';
+export { loadDevelop, writeDevelop, SdkError } from './develop';
 export {
   listMetadataDomains, listMetadataFunctions,
   registerMetadataFunction, registerMetadataFunctions,
@@ -909,19 +833,11 @@ export {
 } from './metadata';
 ```
 
-类型导出补 `DomainInfoDto`、`InputParamMeta`、`RuleFunctionMeta`、`RegisterFunctionResult`、`ListFunctionsResult`、`MetadataDomainResolution`。
+类型导出补 `DomainInfoDto`、`InputParamMeta`、`RuleFunctionMeta`、`RegisterFunctionResult`、`ListFunctionsResult`。
 
 #### 3.3.6 `packages/sdk/src/download.ts`
 
-`DownloadOptions` 加 `metadataDomain?: string`；调用改为：
-
-```ts
-await send.call(rpc, 'download',
-  [projectUuid, destDir, adminTool ?? null, metadataDomain?.trim() || null],
-  DOWNLOAD_TIMEOUT_MS);
-```
-
-旧桥忽略第 4 个参数，兼容。Java 侧若收到非空值，写入 `.develop` 的 `MetadataDomain`。
+**不修改**。下载不再携带 `metadataDomain` 参数，Java 侧也不写 `.develop` 的 `MetadataDomain`。下载到 VF 工作区后，注册时从 VF `server-profiles.json` 读取域；下载到独立工作区时，走 `.develop` 只读回退 / `listDomains()` 选择。
 
 ### 3.4 宿主命令层
 
@@ -932,9 +848,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
- * 读取 VotaForge 当前 profile 的 busDomainCode，仅用于 QuickPick 预选提示。
- * - 只读；绝不写回；绝不自动当成 MetadataDomain。
- * - 文件缺失/非法/过大/字段缺失一律返回 undefined，不抛错。
+ * 读取 VotaForge 当前 active profile 的 busDomainCode。
+ * - 这是 MetadataDomain 的权威来源（用户已确认二者等价）；只读，绝不写文件。
+ * - 文件缺失/非法/过大/字段缺失一律返回 undefined，不抛错，由调用方回退。
  */
 export function readActiveBusDomainCode(vfRoot: string): string | undefined {
   const file = path.join(vfRoot, '.votaforge', 'server-profiles.json');
@@ -958,7 +874,7 @@ export function readActiveBusDomainCode(vfRoot: string): string | undefined {
 }
 ```
 
-兼容 `activeProfile` 对象是防御性的；以 `activeProfileId + profiles[]` 为主（与 `docs/architecture/workspace-protocol.md` §4.2 一致）。
+兼容 `activeProfile` 对象是防御性的；以 `activeProfileId + profiles[]` 为主（与 `docs/architecture/workspace-protocol.md` §4.2 一致）。返回值直接作为 `domainCode` 使用，调用方只需做 `validateMetadataDomainCode` 的基础校验；**不要求先 `listDomains()` 校验**，若域已失效，由服务器在注册时返回错误。
 
 #### 3.4.2 `java-source.ts`（新增，纯函数，可单测）
 
@@ -984,7 +900,9 @@ export function appendNestedClass(base: string, nestedChain: string[]): string |
 导入新增：
 
 ```ts
+import { findVfWorkspaceRoot } from '../backend-projects';
 import { readActiveBusDomainCode } from '../projects/server-profiles';
+import { validateMetadataDomainCode, type BapSdk, type DomainInfoDto } from '@bap/sdk';
 import {
   deriveFullClassFromSource, isValidFullClassName, isValidMethodName, appendNestedClass,
 } from '../java-source';
@@ -993,57 +911,80 @@ import {
 内部辅助：
 
 ```ts
+/** 非 VF 工程的 QuickPick 选择只在本会话缓存，绝不写 .develop。 */
+const domainSelectionCache = new Map<string, string>();
+
+function tryMetadataDomain(
+  code: string | undefined,
+  source: 'vf' | 'develop',
+): string | undefined {
+  if (!code) return undefined;
+  try {
+    return validateMetadataDomainCode(code);
+  } catch (e) {
+    log.debug(`[metadata] ${source} 域非法，忽略: ${errorMessage(e)}`);
+    return undefined;
+  }
+}
+
 async function ensureMetadataDomain(
   ctx: BackendProjectContext,
   sdk: BapSdk,
-  opts: { force?: boolean } = {},
 ): Promise<string | undefined> {
-  const configured = sdk.metadata.configuredDomain();
-  if (configured && !opts.force) return configured;
+  // 1) VotaForge 当前 profile 的 busDomainCode：权威来源，直接使用。
+  const vfRoot = findVfWorkspaceRoot(ctx.root, vscode.workspace.workspaceFolders ?? []);
+  if (vfRoot) {
+    const domain = tryMetadataDomain(readActiveBusDomainCode(vfRoot), 'vf');
+    if (domain) {
+      log.debug(`[metadata] domain=${domain} source=vf:${path.basename(vfRoot)} [${ctx.displayName}]`);
+      return domain;
+    }
+    log.debug(`[metadata] VF 根 ${vfRoot} 未提供有效 busDomainCode，回退 .develop/listDomains`);
+  }
 
-  // 网络调用放队列；QuickPick 不放队列。
+  // 2) 旧 .develop 只读回退（兼容 IDEA/非 VF 工程）；绝不写回。
+  const configured = tryMetadataDomain(sdk.metadata.configuredDomain(), 'develop');
+  if (configured) {
+    log.debug(`[metadata] domain=${configured} source=develop [${ctx.displayName}]`);
+    return configured;
+  }
+
+  // 3) 本会话已选过的非 VF 域，避免每次注册都弹 QuickPick。
+  const cached = domainSelectionCache.get(ctx.projectId);
+  if (cached) return cached;
+
+  // 4) 服务器候选 + QuickPick；网络调用放队列，QuickPick 不放队列。
   const domains = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'BAP: 读取业务域列表…' },
     () => ctx.runExclusive(() => sdk.metadata.listDomains({ refresh: true })),
   );
   if (domains.length === 0) {
     void vscode.window.showWarningMessage(
-      'BAP: 服务器未返回任何业务域（MetadataDomain）。请确认服务器已启用 panelxpro 元数据服务、账号有权限。',
+      'BAP: 服务器未返回任何业务域（MetadataDomain）。请检查 VotaForge server-profiles.json 的 activeProfileId/busDomainCode，或确认服务器已启用 panelxpro 元数据服务、账号有权限。',
     );
     return undefined;
   }
-
-  const vfRoot = findVfWorkspaceRoot(ctx.root, vscode.workspace.workspaceFolders ?? []);
-  const hint = vfRoot ? readActiveBusDomainCode(vfRoot) : undefined;
-  const suggested = hint && domains.some((d) => d.code === hint) ? hint : undefined;
 
   const items = domains
     .filter((d): d is DomainInfoDto & { code: string } => !!d.code)
     .map((d) => ({
       label: d.code,
       description: d.name || '',
-      detail: [
-        d.description || '',
-        d.code === suggested ? 'VotaForge 当前业务域（仅提示，未自动写入）' : '',
-      ].filter(Boolean).join(' · '),
-      picked: d.code === (configured ?? suggested),
+      detail: d.description || '',
       code: d.code,
     }));
 
   const picked = await vscode.window.showQuickPick(items, {
-    title: opts.force ? 'BAP: 切换 MetadataDomain' : 'BAP: 选择 MetadataDomain',
-    placeHolder: hint && !suggested
-      ? `VotaForge 当前业务域 ${hint} 不在服务器列表中，请手动选择`
-      : '选择业务域（写入 .develop 的 MetadataDomain）',
+    title: 'BAP: 选择 MetadataDomain',
+    placeHolder: 'VotaForge 工程请优先配置 server-profiles.json 的 active profile；本次选择不会写入 .develop',
     matchOnDescription: true,
     matchOnDetail: true,
   });
   if (!picked?.code) return undefined;
-  if (picked.code !== configured) {
-    await ctx.runWrite(() => sdk.metadata.setDomain(picked.code));
-    log.debug(`[metadata] domain=${picked.code} 写入 .develop [${ctx.displayName}]`);
-  }
-  return picked.code;
+  const domain = validateMetadataDomainCode(picked.code);
+  domainSelectionCache.set(ctx.projectId, domain);
+  log.debug(`[metadata] domain=${domain} source=listDomains [${ctx.displayName}]`);
+  return domain;
 }
 ```
 
@@ -1132,16 +1073,7 @@ command(
 ),
 ```
 
-切换域命令：
-
-```ts
-command('bapIde.metadata.switchDomain', async (arg) => {
-  const ctx = await resolveOneForUi(arg, '切换 MetadataDomain');
-  const code = await ensureMetadataDomain(ctx, ctx.ensureSdk(), { force: true });
-  if (!code) return;
-  void vscode.window.showInformationMessage(`BAP: MetadataDomain 已切换为 ${code}`);
-}),
-```
+**不提供 `Switch Metadata Domain` 命令**：VF 工程切换域 = 切换 VotaForge active profile；非 VF 工程的临时选择由首次注册的 QuickPick 完成（只在本会话缓存，不写 `.develop`）。
 
 `resolveMethodTarget` 解析顺序：
 
@@ -1160,11 +1092,12 @@ command('bapIde.metadata.switchDomain', async (arg) => {
 
 | 操作 | 包装 | 原因 |
 |---|---|---|
-| `metadata.listDomains`（选域时） | `ctx.runExclusive` | 只读网络调用，避免与同工程长任务并发 |
-| `metadata.setDomain`（写 `.develop`） | `ctx.runWrite` | 改工程文件，需身份校验 |
+| `metadata.listDomains`（非 VF 兜底选域） | `ctx.runExclusive` | 只读网络调用，避免与同工程长任务并发 |
 | `metadata.registerFunction(s)` | `ctx.runWrite` | 云端写操作，需身份校验 + 串行 |
 | `metadata.listFunctions`（未来） | `ctx.runExclusive` | 只读 |
 | QuickPick / 确认框 / 进度 UI | 队列外 | 不能阻塞队列 |
+
+域解析本身**不写任何文件**，因此不需要 `ctx.runWrite`；只有真正注册才走 `runWrite`。
 
 `bapIde.scm.refresh` 目前不走 `runExclusive`。metadata 注册不修改本地文件，不会触发 SCM 自动刷新；手动刷新或其它命令在注册期间仍可能排队到单线程 Java 桥，导致 TS 30 s 默认超时。建议顺手把 `bapIde.scm.refresh` 的 per-context handler 包进 `ctx.runExclusive`（小改动，统一串行语义）；若不改，至少在此文档中记录为已知限制。
 
@@ -1173,7 +1106,6 @@ command('bapIde.metadata.switchDomain', async (arg) => {
 `contributes.commands` 追加：
 
 ```json
-{ "command": "bapIde.metadata.switchDomain", "title": "Switch Metadata Domain", "category": "BAP" },
 { "command": "bapIde.metadata.registerClassFunctions", "title": "Register Class Rule Functions", "category": "BAP" },
 { "command": "bapIde.metadata.registerMethodFunction", "title": "Register Method Rule Function", "category": "BAP" }
 ```
@@ -1193,22 +1125,7 @@ command('bapIde.metadata.switchDomain', async (arg) => {
 }
 ```
 
-切换域默认出现在命令面板（无需显式 `commandPalette` 条目）。可选加入 SCM 标题栏：
-
-```json
-{
-  "command": "bapIde.metadata.switchDomain",
-  "group": "navigation@8",
-  "when": "scmProvider =~ /^bap($|:)/"
-},
-{
-  "command": "bapIde.metadata.switchDomain",
-  "group": "2_main@9",
-  "when": "scmProvider =~ /^bap($|:)/"
-}
-```
-
-注意：`scm/title` 传入的是 `SourceControl` 对象，`resolveOneForUi` 的 `requestFromArg` 已支持；`resolveOneForUi(..., '切换 MetadataDomain')` 默认非写操作，`setDomain` 走 `runWrite` 时仍会校验身份。
+两个注册命令默认出现在命令面板，不需要额外的 `commandPalette` 条目，也不加入 SCM 标题栏。VF 工程切换域请切换 VotaForge active profile；非 VF 工程首次注册时 QuickPick 选择（本会话有效）。
 
 ### 3.6 MCP（P1，建议纳入）
 
@@ -1219,28 +1136,35 @@ command('bapIde.metadata.switchDomain', async (arg) => {
 ```ts
 T(
   'registerClassRuleFunctions',
-  '把指定 Java 类的全部方法注册为 BAP 规则函数（云端写操作）。domainCode 缺省时使用 .develop 的 MetadataDomain；两者都没有会报错并返回可用业务域。',
+  '把指定 Java 类的全部方法注册为 BAP 规则函数（云端写操作）。domainCode 缺省时使用 VotaForge server-profiles.json 当前 profile 的 busDomainCode（其次 .develop 的 MetadataDomain）；都没有会报错并返回可用业务域。',
   obj({
     project: P,
     fullClass: S('Java 点分全类名'),
-    domainCode: S('业务域 code；缺省用 .develop 的 MetadataDomain'),
+    domainCode: S('业务域 code；缺省用 VF busDomainCode / .develop MetadataDomain'),
   }, ['fullClass']),
   'bapIde.metadata.registerClassFunctions',
 ),
 T(
   'registerMethodRuleFunction',
-  '把指定 Java 类的某个方法注册为 BAP 规则函数（云端写操作）。domainCode 缺省时使用 .develop 的 MetadataDomain；两者都没有会报错并返回可用业务域。',
+  '把指定 Java 类的某个方法注册为 BAP 规则函数（云端写操作）。domainCode 缺省时使用 VotaForge server-profiles.json 当前 profile 的 busDomainCode（其次 .develop 的 MetadataDomain）；都没有会报错并返回可用业务域。',
   obj({
     project: P,
     fullClass: S('Java 点分全类名'),
     methodName: S('方法名'),
-    domainCode: S('业务域 code；缺省用 .develop 的 MetadataDomain'),
+    domainCode: S('业务域 code；缺省用 VF busDomainCode / .develop MetadataDomain'),
   }, ['fullClass', 'methodName']),
   'bapIde.metadata.registerMethodFunction',
 ),
 ```
 
-`packages/vscode-host/src/mcp/tool-exec.ts`：
+`packages/vscode-host/src/mcp/tool-exec.ts` 新增导入（**不直接 import `vscode`**，保持该模块可单测；workspace folder 路径由命令路由注入 `McpToolCtx.workspaceFolders`）：
+
+```ts
+import { findVfWorkspaceRoot } from '../backend-projects';
+import { readActiveBusDomainCode } from '../projects/server-profiles';
+import { validateMetadataDomainCode } from '@bap/sdk';
+import { isValidFullClassName, isValidMethodName } from '../java-source';
+```
 
 ```ts
 function requireString(a: ToolArg, key: string): string {
@@ -1249,14 +1173,38 @@ function requireString(a: ToolArg, key: string): string {
   return v;
 }
 
+function tryMetadataDomainForTool(
+  ctx: McpToolCtx,
+  code: string | undefined,
+  source: string,
+): string | undefined {
+  if (!code) return undefined;
+  try {
+    return validateMetadataDomainCode(code);
+  } catch (e) {
+    ctx.log.debug(`[metadata] ${source} 域非法，忽略: ${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
+  }
+}
+
 async function resolveMetadataDomainForTool(ctx: McpToolCtx, a: ToolArg): Promise<string> {
   const explicit = typeof a.domainCode === 'string' ? a.domainCode.trim() : '';
-  const configured = ctx.sdk.metadata.configuredDomain();
-  const code = explicit || configured;
-  if (code) return validateMetadataDomainCode(code);
+  if (explicit) return validateMetadataDomainCode(explicit);
+
+  const vfRoot = findVfWorkspaceRoot(ctx.workspaceRoot, ctx.workspaceFolders ?? []);
+  const vfDomain = tryMetadataDomainForTool(
+    ctx, vfRoot ? readActiveBusDomainCode(vfRoot) : undefined, 'VF busDomainCode',
+  );
+  if (vfDomain) return vfDomain;
+
+  const configured = tryMetadataDomainForTool(
+    ctx, ctx.sdk.metadata.configuredDomain(), '.develop MetadataDomain',
+  );
+  if (configured) return configured;
+
   const domains = await ctx.sdk.metadata.listDomains();
   const codes = domains.map((d) => d.code).filter(Boolean).join('、') || '（服务器未返回）';
-  throw new Error(`缺少 domainCode，且 .develop 未配置 MetadataDomain；可用业务域：${codes}`);
+  throw new Error(`缺少 domainCode，且 VotaForge server-profiles.json / .develop 均未提供；可用业务域：${codes}`);
 }
 
 case 'registerClassRuleFunctions': {
@@ -1286,7 +1234,9 @@ command('bapIde.metadata.registerClassFunctions', toolCommand('registerClassRule
 command('bapIde.metadata.registerMethodFunction', toolCommand('registerMethodRuleFunction', registerMethodUi)),
 ```
 
-MCP 路径的域策略：`domainCode` 显式值 > `.develop` 配置值；都没有时**不弹 QuickPick**，直接 `listDomains()` 后抛错并列出可用 code，让 AI 带 `domainCode` 重试。MCP **绝不使用** VotaForge `busDomainCode` 提示。
+MCP 路径的域策略：`domainCode` 显式值 > VF active profile `busDomainCode` > `.develop` 只读值；都没有时**不弹 QuickPick**，直接 `listDomains()` 后抛错并列出可用 code，让 AI 带 `domainCode` 重试。MCP **不写 `.develop`**，也不修改 VF 配置。
+
+MCP 还有一层宿主 ↔ `mcp-server` 的 IPC 超时：`ipcTimeoutForTool`（`packages/vscode-host/src/mcp/ipc-protocol.ts`）默认 30 s。两个注册工具必须加入长超时组（30 min），且严格大于 SDK 的 12 min，否则宿主尚未返回，MCP 子进程会先报“IPC 超时”。
 
 ### 3.7 测试
 
@@ -1298,23 +1248,18 @@ MCP 路径的域策略：`domainCode` 显式值 > `.develop` 配置值；都没�
 2. entry-key 格式 `<entry key="MetadataDomain">D2</entry>` 和 `<entry key="metadataDomain">D3</entry>` 大小写不敏感。
 3. 空值 `MetadataDomain=""` → `undefined`。
 4. 注释里的 `MetadataDomain="FAKE"` 不解析。
-5. `updateDevelopMetadataDomain` 替换已有属性，保留其它属性、注释、CRLF、BOM。
-6. 缺失时插入到根标签 `/>` 前；不是 `replaceFirst('/>')`，子标签存在时也只改根标签。
-7. entry-key 格式替换/插入；保留其它 entry。
-8. 幂等：连续调用两次结果一致。
-9. XML 转义：值含 `&`、`"` 时正确编码，再 `loadDevelop` 能还原。
-10. 非法域 code → `SdkError('METADATA_DOMAIN_INVALID')`。
-11. `.develop` 缺失 → `MISSING_DEVELOP`。
-12. `writeDevelop`：`metadataDomain` 为 `undefined` 保留、`null` 删除、字符串写入。
-13. `writeDevelop` 保留未知属性/注释；`localNioPort` 尊重传入值。
-14. `writeDevelop` 文件不存在时生成含 `MetadataDomain` 的规范 XML。
-15. `writeDevelop` 在 entry-key 格式上不丢失其它 entry。
+5. `writeDevelop` 保留原文件已有的 `MetadataDomain`（重定向场景不擦除 IDEA 写入的值）。
+6. `writeDevelop` 在原文件无 `MetadataDomain` 时**不新增**该属性。
+7. `.develop` 缺失 → `MISSING_DEVELOP`；格式非法 → `CONFIG_INCOMPLETE`。
+8. `validateMetadataDomainCode` 拒绝空值/控制字符；合法值原样返回。
+
+不再测试 `updateDevelopMetadataDomain` / 写入新域：本版没有这些 API。
 
 #### `packages/sdk/test/metadata.test.ts`（新增）
 
 用假 `RpcInvoker` 记录 `request` 调用：
 
-1. `listMetadataDomains` 参数为 `['metadata', ['call','listDomains',[]]]`，超时 120 s。
+1. `listMetadataDomains` 参数为 `['metadata', ['call','listDomains',[]]]`，超时 150 s。
 2. `registerMetadataFunction` 参数 `['metadata',['call','registerFunction',[domain,class,method]]]`，超时 12 min。
 3. `registerMetadataFunctions` 同理。
 4. `success:false` 原样返回，不抛。
@@ -1324,11 +1269,11 @@ MCP 路径的域策略：`domainCode` 显式值 > `.develop` 配置值；都没�
 8. `listDomains` 返回非数组 → `METADATA_BAD_RESPONSE`。
 9. `registerFunction` 返回非对象 / `success` 非 boolean → `METADATA_BAD_RESPONSE`。
 10. `configuredDomain`：有 `.develop` 域直接返回，不发起 RPC。
-11. `resolveDomain`：有配置 → `source:'develop'`、`candidates:[]`；无配置 → `source:'unconfigured'`、调用 `listDomains`。
-12. `setDomain` 写 `.develop`，`configuredDomain` 能读回；不发起 `rpc.connect`。
+11. `configuredDomain`：`.develop` 无域/缺失/非法 → `undefined`，不抛。
+12. `configuredDomain` 读取前后文件内容一致（绝不写 `.develop`）。
 13. `onLog` 不包含密码字符串。
 14. 域缓存：TTL 内第二次 `listDomains` 不重复 RPC；`refresh:true` 强制 RPC。
-15. `redirect.apply`：同 URI 保留域，不同 URI 清空域（需要临时目录 + 假 RPC）。
+15. `redirect.apply` 后 metadata 缓存失效，下次 `listDomains` 重新 `metadata.connect`；`.develop` 的既有 `MetadataDomain` 不被删除。
 
 #### `packages/vscode-host/test/server-profiles.test.ts`（新增）
 
@@ -1338,6 +1283,9 @@ MCP 路径的域策略：`domainCode` 显式值 > `.develop` 配置值；都没�
 4. 文件超过 256 KiB → `undefined`。
 5. 命中 profile 无 `busDomainCode` → `undefined`。
 6. 不修改文件（读取前后内容一致）。
+7. 多个 profile 时只取 `activeProfileId` 指向的那个，不取第一个。
+8. 兼容旧 `activeProfile` 对象；`activeProfileId` 优先。
+9. 返回的 code 直接用于注册（不依赖 `listDomains` 精确匹配）。
 
 #### `packages/vscode-host/test/java-source.test.ts`（新增）
 
@@ -1358,17 +1306,17 @@ MCP 路径的域策略：`domainCode` 显式值 > `.develop` 配置值；都没�
 
 ### 3.8 文档
 
-1. 本文档（`docs/BAP IDE 规则函数注册（MetadataDomain）移植方案 V1.0.md`）已覆盖协议、域生命周期、限制与排障；实施时如需要面向使用者的独立架构说明，再从本文档拆分出 `docs/architecture/metadata-rule-functions.md`（不要原样复制，避免两份内容漂移）：
+1. 本文档（`docs/BAP IDE 规则函数注册（MetadataDomain）移植方案 V1.0.md`）已覆盖协议、域来源与生命周期、限制与排障；实施时如需要面向使用者的独立架构说明，再从本文档拆分出 `docs/architecture/metadata-rule-functions.md`（不要原样复制，避免两份内容漂移）：
    - 背景与与 IDEA 的差异（无 PSI、无 SharedClient）。
    - 双 CRPC 客户端与全局会话。
    - `metadata` 桥协议与超时矩阵。
    - DTO 序列化契约与版本排查（`InvalidClassException` → 检查 `serialVersionUID`/字段）。
-   - `MetadataDomain` 生命周期与 `.develop` 格式。
-   - VotaForge `busDomainCode` 仅为提示的边界。
+   - `MetadataDomain` 来源（VF `server-profiles.json` > `.develop` 只读回退 > `listDomains()`）。
+   - VotaForge `busDomainCode` 与 `MetadataDomain` 等价（用户确认），以及不回写 `.develop` 的边界。
    - UI/MCP 用法与限制（构造器、匿名类、同名重载、未提交代码）。
    - 排障：`unknown_method`、服务不可用、无候选域、超时。
 2. `README.md`：
-   - 功能列表加“规则函数注册（类/方法，MetadataDomain 可选/切换）”。
+   - 功能列表加“规则函数注册（类/方法，自动取 VotaForge 当前业务域）”。
    - 工具数量与“15 个工程级”按最终是否做 MCP 更新（18→20、15→17，或保持不变）。
    - Java 桥说明补 metadata 服务。
 3. `skill/bap-vscode-mcp/SKILL.md` + `references/commands.md`（仅做 MCP 时）：
@@ -1381,94 +1329,80 @@ MCP 路径的域策略：`domainCode` 显式值 > `.develop` 配置值；都没�
    - 工具清单加两行：
      - `registerClassRuleFunctions` 注册类的规则函数
      - `registerMethodRuleFunction` 注册方法的规则函数
-   - 说明“需要 MetadataDomain；缺省用 `.develop`，没有则先报错返回可用业务域”。
+   - 说明“需要 MetadataDomain；缺省用 VF `server-profiles.json` 的 active profile `busDomainCode`，其次 `.develop`；都没有则先报错返回可用业务域”。
 
 ---
 
-## 4. MetadataDomain 获取、写回与 VotaForge `busDomainCode` 边界
+## 4. MetadataDomain 来源与优先级
 
-### 4.1 权威来源与状态机
+### 4.1 权威来源
 
-**权威来源只有两个**：
+用户已确认：**`MetadataDomain` 就是 VotaForge `server-profiles.json` 当前 profile 的 `busDomainCode`**。因此本插件不再把 `busDomainCode` 当作“提示”，也不再要求用户手动选域；注册时按以下优先级解析：
 
-1. `.develop` 中的 `MetadataDomain`（本地配置，注册时直接使用）。
-2. 服务器 `listDomains()` 返回的 `DomainInfoDto.code`（用户选择后写回 `.develop`）。
+1. **MCP 显式 `domainCode` 参数**（仅 MCP，最高优先级；用于调用方覆盖）。
+2. **VotaForge active profile 的 `busDomainCode`**：`<vfRoot>/.votaforge/server-profiles.json` 中 `activeProfileId` 指向的 profile。直接作为 `domainCode` 使用。
+3. **`.develop` 的 `MetadataDomain`**：只读回退，兼容 IDEA 写入的旧配置或非 VF 工程；本插件绝不写。
+4. **`listDomains()` + QuickPick**：前两者都没有时，UI 交互式选择；选中值只在本会话缓存。MCP 非交互，直接报错并返回候选。
 
-**VotaForge `server-profiles.json` 的 `busDomainCode` 不是权威来源**，只是 UI 提示。
+**不再有 `Switch Metadata Domain` 命令**：
 
-状态机：
+- VF 工程要换业务域 → 修改 VotaForge 的 active profile（或直接编辑 `server-profiles.json` 的 `activeProfileId`）。
+- 非 VF 工程的临时选择 → 首次注册时 QuickPick；本会话有效。若需持久化，用户自行编辑 `.develop` 的 `MetadataDomain`，本插件不代写。
+
+### 4.2 状态机
 
 ```text
-读取 .develop
-  ├─ 有 MetadataDomain → 直接使用（source=develop）
-  └─ 无
-       ├─ listDomains()
-       │    ├─ 空 → 警告并中止（不注册、不写 .develop）
-       │    └─ 非空 → QuickPick
-       │         ├─ 取消 → 中止
-       │         └─ 选中 → setDomain(code) 写回 .develop → 继续注册
-       └─ RPC 失败 → 错误提示并中止
-
-switchDomain 命令
-  → listDomains(refresh=true)（无论是否已配置）
-  → QuickPick（预选当前值）
-  → 选中且与当前不同 → setDomain 写回
-  → 相同/取消 → 不写
+解析域（register* 每次调用时重新解析，不做跨会话缓存）
+  ├─ MCP 显式 domainCode → 校验后直接使用
+  ├─ findVfWorkspaceRoot(projectRoot, workspaceFolders)
+  │    └─ readActiveBusDomainCode(vfRoot)
+  │         ├─ 有值 → validateMetadataDomainCode → 直接使用
+  │         └─ 无/非法 → 继续
+  ├─ .develop 的 MetadataDomain（只读）
+  │    ├─ 有值 → validateMetadataDomainCode → 使用
+  │    └─ 无 → 继续
+  ├─ 本会话 QuickPick 缓存（仅非 VF 兜底）
+  │    └─ 命中 → 使用
+  └─ listDomains()
+       ├─ 空 → 警告并中止（不注册）
+       └─ 非空
+            ├─ UI → QuickPick → 选中值写入会话缓存 → 使用；取消 → 中止
+            └─ MCP → 抛错并列出候选 code
 ```
 
-### 4.2 各入口流程
+要点：
 
-| 入口 | 域获取 | 写回 | 说明 |
+- **不校验 VF 域是否出现在 `listDomains()`**：直接使用，避免多一次网络调用；域失效由服务器在注册时返回错误。
+- **每次注册重新读 VF 文件**：用户切换 active profile 后无需重启窗口。
+- **不写任何文件**：域解析只读；注册本身是云端写操作，仍走 `ctx.runWrite`。
+- **失败可诊断**：VF 文件缺失/JSON 非法/active profile 无 `busDomainCode` 时走回退；`listDomains` 也失败时，错误信息应同时提示检查 `server-profiles.json` 和服务器元数据服务。
+
+### 4.3 各入口流程
+
+| 入口 | 域获取 | 写文件 | 说明 |
 |---|---|---|---|
-| `bapIde.metadata.registerMethodFunction` | 已配置直接用；否则 listDomains + QuickPick | 选中后写 `.develop` | 写回后再注册；方法注册不弹确认框 |
-| `bapIde.metadata.registerClassFunctions` | 同上 | 同上 | 注册前弹模态确认（类全量扫描影响面大） |
-| `bapIde.metadata.switchDomain` | 强制 listDomains + QuickPick | 选中后写 `.develop` | 单独入口，不触发注册 |
-| `bapIde.scm.redirect` | 不重新选择 | 同服务器保留；换服务器删除 | 防止把 A 服务器的域带到 B 服务器 |
-| `bapIde.downloadProject`（UI） | P0：下载后提示“重新加载后运行 Switch Metadata Domain”；P1：下载前可选域并传给 Java | Java 写入（P1） | 新工程 `.develop` 默认无域 |
-| `downloadProject`（MCP） | P1：可选 `domainCode` 参数 | Java 写入 | 不提供则下载后由用户切 |
-| MCP `registerClassRuleFunctions` / `registerMethodRuleFunction` | `domainCode` 参数 > `.develop`；都没有 → 报错并列出候选 | 不写 `.develop`（MCP 非交互） | 绝不使用 VF 提示、绝不弹窗 |
+| `bapIde.metadata.registerMethodFunction` | MCP 显式参数不适用；VF `busDomainCode` > `.develop` > QuickPick | 不写 | 方法注册不弹确认框 |
+| `bapIde.metadata.registerClassFunctions` | 同上 | 不写 | 注册前弹模态确认 |
+| MCP `registerClassRuleFunctions` / `registerMethodRuleFunction` | `domainCode` > VF `busDomainCode` > `.develop` > 报错列候选 | 不写 | 不弹 QuickPick |
+| `bapIde.scm.redirect` | 不解析域 | 仅 `writeDevelop` 保留既有 `MetadataDomain` | 重定向后下次注册重新读 VF |
+| `bapIde.downloadProject`（UI/MCP） | 不解析域 | 不写 `.develop` 域 | VF 工程下载后由 server-profiles 提供；独立工程首次注册 QuickPick |
 
-### 4.3 `.develop` 写回格式
+### 4.4 `.develop` 的角色（只读兼容）
 
-两种历史格式都要支持：
+- `loadDevelop` 解析 `MetadataDomain`，仅用于非 VF 工程或旧配置的回退；缺失/空值 → `undefined`。
+- `writeDevelop`（redirect 使用）在重写 `.develop` 时保留原文件已有的 `MetadataDomain`，但**绝不新增**；这避免重定向擦掉 IDEA 写入的值。
+- 下载流程不再携带域参数，Java 侧不写 `MetadataDomain`。
+- `.develop` 不存在/无域不影响 VF 工程注册。
+- **已知边界**：非 VF 工程重定向到另一台服务器后，`.develop` 的旧 `MetadataDomain` 会被保留，可能属于旧服务器；此时应手动修改 `.develop` 或删除该属性（本插件不代改），或改用 VF 工程由 active profile 管理。
 
-属性格式（当前 Java 桥/IDEA 主格式）：
+### 4.5 `server-profiles.json` 读取细节
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-
-<Development Project="..." Uri="..." AdminTool="..." User="..." Password="..." LocalNioPort="-1" MetadataDomain="DOMAIN_CODE"/>
-```
-
-entry-key 格式（旧格式，`loadDevelop` 已支持）：
-
-```xml
-<properties>
-  <entry key="Project">...</entry>
-  <entry key="Uri">...</entry>
-  <entry key="MetadataDomain">DOMAIN_CODE</entry>
-</properties>
-```
-
-写回规则：
-
-- 属性格式：只改根标签，不动子标签/注释；插入时放在根标签 `/>` 前。
-- entry 格式：只改 `MetadataDomain` 对应 entry；没有则在 `</properties>` 前插入。
-- 两种格式同时存在：都更新，保证 `loadDevelop` 的“后写覆盖”结果一致（当前实现先 entry 后 attribute，attribute 胜出）。
-- 原子写：临时文件 + rename；POSIX `0600`。
-- 不整文件重写；不丢未知属性/注释；不改换行风格。
-- 写完后再用 `loadDevelop` 校验一次；解析不出 `metadataDomain` 视为写失败（防止静默损坏）。
-
-### 4.4 VotaForge `busDomainCode` 的边界
-
-- **语义不同**：`busDomainCode` 是 VotaForge 前端业务域（例如 `GroupChat_Inst_17790942612666`）；BAP `MetadataDomain` 是 panelxpro 元数据域。两者可能同名，也可能不同名；不能假设一一对应。
-- **只读**：`readActiveBusDomainCode` 只读 `.votaforge/server-profiles.json`，不写任何文件。
-- **只在 UI 提示**：仅在 `register*` 的 QuickPick 中，若 `busDomainCode` 与服务器候选**完全相等**，预选该项并在 `detail` 标注“仅提示，未自动写入”。
-- **不自动写**：即使用户看到预选，也必须点击确认；`setDomain` 只在选择后调用。
-- **不匹配不猜**：没有精确匹配时，不预选、不写回；`placeHolder` 提示“VotaForge 当前业务域 X 不在服务器列表中，请手动选择”。
-- **MCP 不使用**：MCP 路径完全不读 VF 文件；只认 `domainCode` 参数或 `.develop`。
-- **失败静默**：文件缺失/JSON 非法/超 256 KiB/字段缺失 → 返回 `undefined`，不影响注册流程。
-- **不记录敏感信息**：只读 `id`/`busDomainCode` 两个字段用于提示；不打印整个 profile（可能含账号信息）。
+- 文件：`<vfRoot>/.votaforge/server-profiles.json`，最大 256 KiB；缺失/非法/超限 → `undefined`。
+- 主格式：`activeProfileId` + `profiles[]`；兼容旧 `activeProfile` 对象（`activeProfileId` 优先）。
+- 只取 `id`/`busDomainCode`（日志也不打印 `baseUrl`、账号等其它字段）。
+- 无 `activeProfileId` 时**不猜测**第一个 profile；返回 `undefined` 并回退。
+- `busDomainCode` 去首尾空白；空字符串视为无值。
+- VF 根必须是当前 workspace folder（复用 `findVfWorkspaceRoot`）；如果用户只打开了后端工程子目录、没有把 VF 根加入工作区，则按无 VF 处理，走 `.develop`/`listDomains` 回退，不会向上越界查找。
 
 ---
 
@@ -1518,6 +1452,10 @@ grep -n "bridge-main.jar" apps/vscode/src/extension.ts
 ```bash
 BAP_URI='ws://...' BAP_USER='...' BAP_PWD='...' \
   npx tsx packages/sdk/scripts/metadata-smoke.ts
+
+# 推荐：直接读某工程的 .develop，密码不进入命令行/终端
+BAP_PROJECT_ROOT='/path/to/project' \
+  npx tsx packages/sdk/scripts/metadata-smoke.ts
 ```
 
 脚本流程：
@@ -1537,20 +1475,31 @@ BAP_URI='ws://...' BAP_USER='...' BAP_PWD='...' \
   npx tsx packages/sdk/scripts/metadata-smoke.ts
 ```
 
-写入只针对测试工程/测试域，不提交、不发布；结束后 `metadataDisconnect` + `close`。
+写入只针对测试工程/测试域，不提交、不发布；结束后 `metadataDisconnect` + `close`。环境变量模式可另加 `BAP_PROJECT_UUID`，用于写入前通过 `code.getRemote` 预检云端类/方法；未提供时跳过预检，由服务器最终校验。
+
+**实施期冒烟记录（2026-11-09，测试服务器，使用 `VotaForge_Test/gpf_dc_PracticalTool/.develop`）：**
+
+- 只读：`listDomains` 返回 12 个域；`listFunctions('SdkTest')` 返回 85 条 / total 91。
+- 写入：`registerFunction('SdkTest', 'cell.practicalTool.expr.ICustomInitiatorRulesExpr', '自定义发起人规则')` → `success=true`，`message=注册成功`；随后 `listFunctions` 变为 86 条 / total 92，确认云端已生效。
+- 失败路径：目标方法缺 `@MethodDeclare` / `@FuncDeclare` 时，服务器返回 `success=false` 业务消息（界面原样提示），SDK 不抛协议错误，且未产生副作用。
+- 安全：全部输出仅含域/类/方法/计数/结果消息，未出现账号或密码。
+- VF 前置校验：`readActiveBusDomainCode(<VF 根>)` 返回 active profile 的 `busDomainCode`；`findVfWorkspaceRoot(<工程>, [<VF 根>])` 命中 VF 根；该工程 `.develop` 无 `MetadataDomain`。
+- 结论：协议、序列化、超时、域解析与受控写入均通过；VS Code 界面交互仍按 §5.3 由人工验收。
+- P1（同日）：MCP `registerClassRuleFunctions` / `registerMethodRuleFunction` 已接入 `tools.ts` / `tool-exec.ts`；MCP 域解析为 `domainCode` > VF `busDomainCode` > `.develop` > 报错列候选；IPC 超时放宽到 30 min（严格大于 SDK 的 12 min）。单测覆盖工具目录/参数、执行分支、域优先级与失败路径；工具计数 20（工程级 17），README / SKILL 同步。
 
 ### 5.3 手工验收清单
 
-1. 工程 `.develop` 无 `MetadataDomain`：在 Java 方法上右键 → `Register Method Rule Function` → 出现 QuickPick（不是死路）→ 选域 → `.develop` 出现 `MetadataDomain="..."` → 注册成功提示。
-2. 再注册一次：不再弹 QuickPick，直接使用已配置域。
-3. `Switch Metadata Domain`：无论是否已配置都列候选，当前值预选；选中新值后 `.develop` 更新；取消不写。
-4. 类注册：弹模态确认；成功后提示注册数量；取消不发请求。
-5. 重定向到另一服务器：`.develop` 的 `MetadataDomain` 被删除；再次注册会重新选域。
-6. 下载新工程（VF 工作区）：下载完成后提示“重新加载后首次注册前运行 Switch Metadata Domain”。
-7. VF `server-profiles.json` 的 `busDomainCode` 与服务器候选完全匹配时预选；不匹配时不预选，且不自动写。
-8. MCP（若做）：带 `domainCode` 调用成功；不带且 `.develop` 无域 → 返回可用业务域列表；带错误类名 → 返回服务器 message，不崩溃。
+1. VF 工程 `.develop` 无 `MetadataDomain`，`server-profiles.json` active profile 有 `busDomainCode`：在 Java 方法上右键 → `Register Method Rule Function` → **直接使用 VF 域，不弹 QuickPick、不写 `.develop`** → 注册成功提示。
+2. 修改 active profile（或 `busDomainCode`）后再次注册：使用新值，无需重启窗口。
+3. 非 VF 工程 `.develop` 有 `MetadataDomain`：直接使用，不弹 QuickPick；文件内容保持不变。
+4. 非 VF 工程且 `.develop` 无域：弹 QuickPick；选中后同会话再次注册不再弹；`.develop` 始终不被修改；重载窗口后重新弹。
+5. 类注册：弹模态确认；成功后提示注册数量；取消不发请求。
+6. VF `server-profiles.json` 缺失/JSON 非法/active profile 无 `busDomainCode`：回退到 `.develop`/QuickPick，不崩溃。
+7. `listDomains()` 返回空：警告并中止，不发起注册。
+8. MCP（若做）：带 `domainCode` 调用成功；不带时优先用 VF `busDomainCode`，其次 `.develop`；都没有 → 返回可用业务域列表，不崩溃。
 9. 旧桥/旧扩展：调用 metadata 得到 `METADATA_UNAVAILABLE`，提示重建重装，不出现未捕获异常。
 10. 密码不出现在输出面板、MCP 结果、异常消息中。
+11. 重定向后 `.develop` 的既有 `MetadataDomain` 不被删除（`writeDevelop` 保留）；VF 工程注册仍优先用 VF 域。
 
 ---
 
@@ -1560,17 +1509,18 @@ BAP_URI='ws://...' BAP_USER='...' BAP_PWD='...' \
 
 | 风险 | 概率/影响 | 缓解 |
 |---|---|---|
-| 服务端未启用 metadata 服务或版本不兼容 | 中/阻塞 | 首次 `listDomains` 作为连通性验证；错误映射为 `METADATA_SERVICE_UNAVAILABLE`；文档给出排障 |
+| 服务端未启用 metadata 服务或版本不兼容 | 中/阻塞 | 首次 `metadata.connect`/`getService`（或 `listDomains`）作为连通性验证；错误映射为 `METADATA_SERVICE_UNAVAILABLE`；文档给出排障 |
 | DTO `serialVersionUID`/字段与服务器不一致 | 中/高 | 逐字复制 IDEA 源；不改包名/类名/字段；真实服务器冒烟；`InvalidClassException` 排障文档 |
 | Java 8 匿名子类钻石/漏 `getAdapter()` | 高（若照抄不完整的示例代码）/编译失败 | 显式泛型 + `@Override getAdapter()`；`build:bridge` 作为 CI 门槛 |
 | `out/`/`dist/lib` 残留旧 class | 高/运行时诡异 | `build.sh` 先 `rm -rf out dist/lib`；jar 内容校验 |
-| `.develop` 被整文件重写导致域/注释丢失 | 中/高 | 原地补丁 + 原子写 + 解析回验；不 `replaceFirst("/>")` |
+| `redirect` 重写 `.develop` 时擦掉既有 `MetadataDomain` | 中/中 | `writeDevelop` 读取旧值并保留；不新增/不删除 |
 | 类/方法解析错误（多顶层类、嵌套类、分屏编辑器） | 中/中 | `package` + 文件 stem 优先；DocumentSymbol + 光标单词 + InputBox 兜底；editor 按 URI 对齐；注册前确认 |
 | 未提交/未保存代码被注册 | 中/中 | 只在云端扫描；界面提示；文档说明 |
 | 单线程 Java 桥被长注册阻塞，其它请求 30 s 超时 | 中/中 | `runWrite`/`runExclusive` 串行；建议 refresh 也入队；文档说明；批量操作避免并发 |
-| VF `busDomainCode` 与 MetadataDomain 语义不同 | 高/中 | 仅精确匹配预选；绝不自动写；MCP 不用 |
-| 重定向把旧域带到新服务器 | 中/高 | 换 URI 清空；同 URI 保留；单测覆盖 |
-| 下载的新工程无域 | 高/UX | switchDomain 命令 + 下载后提示；P1 下载前选择 |
+| VF `server-profiles.json` 缺失/active profile 无 `busDomainCode` | 中/中 | 回退 `.develop`/`listDomains`；日志说明来源；文档给出格式 |
+| active profile 指向的域已失效/不属于当前服务器 | 中/中 | 直接使用并让服务器报错；错误信息提示检查 active profile；不静默改域 |
+| 非 VF 工程重定向后旧 `MetadataDomain` 可能属于旧服务器 | 中/低 | 保留不代改；文档说明手动修改；VF 工程不受影响 |
+| 下载到独立工作区的新工程无域 | 中/UX | 首次注册 QuickPick（会话缓存）；不写 `.develop` |
 | `writeErr`/`destDir` JSON 转义缺陷 | 中/协议错乱 | GSON 序列化 name/message/destDir |
 | `MetadataRpcClient` 误用 IntelliJ Logger | 高/编译失败 | 改用 `java.util.logging.Logger` |
 | 误调 `IPanelMetadataService.get()` | 中/运行时失败 | 桥内禁止调用；只用 `getIntf(true)` |
@@ -1580,41 +1530,42 @@ BAP_URI='ws://...' BAP_USER='...' BAP_PWD='...' \
 
 ### 6.2 待用户确认的决策点
 
-1. **是否包含 `Switch Metadata Domain` 命令**：建议**是**，且放 P0。没有它，`.develop` 无域的新工程无法完成注册闭环；IDEA 也是独立 action。
+1. **是否保留 `.develop` 的 `MetadataDomain` 只读回退**：建议**是**。兼容 IDEA 写入的旧配置和非 VF 工程；VF 场景永远优先 `busDomainCode`，不会误用旧值。代价只是 `loadDevelop` 多解析一个可选字段。
 2. **是否包含 MCP 两个工具**：建议**是**（P1）。注册是天然的非交互操作，AI 工作流价值高；成本约 0.5 人日，但会改工具数量与文档。若暂不需要，整段跳过，不影响 UI。
 3. **是否允许真实服务器验证**：建议先只读 `listDomains`；写入验证使用测试工程/测试域，并显式授权。若不允许，交付时标注“编译/单测通过，服务端未联调”。
-4. **重定向域策略**：换服务器清空、同服务器保留。建议**是**；如希望保留旧域，需要用户确认语义（可能误注册到错误域）。
-5. **下载时的域选择**：P0 只做“下载后提示运行 Switch Metadata Domain”；P1 再做“下载前 QuickPick 并写入 Java 生成的 `.develop`”。建议先 P0，避免下载流程变复杂。
-6. **嵌套类支持**：按 IDEA 的 `PsiClass.getQualifiedName()` 语义，用 `pkg.Outer.Inner` 点号形式。建议支持；若服务器拒绝，回退到顶层类 + InputBox，并在文档标注。
-7. **菜单 placement**：编辑器右键用独立 `bap@1`/`bap@2`；是否加入 SCM 标题栏作为可选。建议 MVP 只做编辑器右键 + 命令面板，SCM 标题栏 P1。
-8. **是否暴露 `listFunctions`**：MVP 不做 UI/MCP；P2 可加“查看已注册规则函数”。
-9. **是否把 `metadataDomain` 加入 `workspaceInfo`**：MVP 不做（涉及返回结构/兼容）；P2 可选。
-10. **`MetadataDomain` 属性名大小写**：写 `MetadataDomain`（与 IDEA/Java 桥一致）；读大小写不敏感。建议确认服务端/工具链没有强制其它拼写。
+4. **VF `busDomainCode` 是否先经 `listDomains()` 校验**：建议**不校验**，直接使用，减少一次网络调用；域失效由服务器在注册时返回错误。若希望更早发现，可在 P1 加“注册前预检”开关。
+5. **非 VF QuickPick 选择是否持久化**：本版**不持久化**（用户明确不写 `.develop`），只做会话缓存。若后续需要持久化，单独加“写入 `.develop`”的可选命令，并重新确认写文件语义。
+6. **是否保留 `Switch Metadata Domain` 命令**：**不保留**。VF 工程切 active profile；非 VF 工程首次注册 QuickPick。
+7. **嵌套类支持**：按 IDEA 的 `PsiClass.getQualifiedName()` 语义，用 `pkg.Outer.Inner` 点号形式。建议支持；若服务器拒绝，回退到顶层类 + InputBox，并在文档标注。
+8. **菜单 placement**：编辑器右键用独立 `bap@1`/`bap@2`；MVP 只做编辑器右键 + 命令面板，不加 SCM 标题栏。
+9. **是否暴露 `listFunctions`**：MVP 不做 UI/MCP；P2 可加“查看已注册规则函数”。
+10. **是否把 `MetadataDomain` 加入 `workspaceInfo`**：MVP 不做（涉及返回结构/兼容）；P2 可选。若做，只返回域 code，不返回账号/密码。
+11. **`MetadataDomain` 属性名大小写**：本版只读不写；读取大小写不敏感。服务端只接收值，不关心 `.develop` 属性名。
 
 ### 6.3 对抗式复核问题闭环
 
 | 复核问题 | 本方案的处理 |
 |---|---|
-| 域从哪来、缺域是否死路 | `.develop` 为权威；缺失时 `listDomains` + QuickPick + 写回；取消才中止 |
+| 域从哪来、缺域是否死路 | VF active profile `busDomainCode` 为权威；其次 `.develop` 只读回退；都没有时 `listDomains` + QuickPick（UI）或报错列候选（MCP）；不写 `.develop` |
 | 集成点是否只写 UI | Java 接口/DTO/客户端、`BridgeMain`、`BridgeMethod`、SDK、宿主、MCP 全部列出 |
 | 只加 `tools.ts` 没加 `tool-exec.ts` | 两处都列；MCP 测试断言 command 映射与执行分支 |
-| 写操作用 `runExclusive` 不够 | 注册/`setDomain` 用 `runWrite`；只读用 `runExclusive`；UI 在队列外 |
+| 写操作用 `runExclusive` 不够 | 注册用 `runWrite`；域解析和只读列表用 `runExclusive`；UI 在队列外 |
 | `DevelopConfig` 位置写错 | 明确在 `packages/sdk/src/types.ts` |
-| 下载新工程没有域 | P0 下载后提示；P1 下载前选择 + Java 可选参数；switchDomain 兜底 |
+| 下载新工程没有域 | VF 工程由 `server-profiles.json` 提供；独立工程首次注册 QuickPick；Java 不再收域参数 |
 | 硬编码 18/15 漂移 | 测试改 `BAP_TOOLS.length`；文档/技能同步 |
 | metadata 前未 `ensureConnected` | SDK `ensureMetadataConnected` 前先 `ensureConnected` |
 | 默认 30 s 超时 | TS/Java 双超时矩阵；注册 12 min / Java 10 min |
 | 编辑器与参数 URI 不一致 | `resolveMethodTarget` 按 URI 对齐编辑器，必要时 `openTextDocument` |
-| VF `busDomainCode` 无替代方案 | `server-profiles.json` 只读提示 + 精确匹配预选 + 服务器候选兜底 |
+| VF `busDomainCode` 无替代方案 | `server-profiles.json` 直读 active profile；`.develop` 只读回退；`listDomains` 兜底 |
 | 扫描器置信度 | 不实现完整 Java 扫描器；`package` + 文件 stem + DocumentSymbol + 单词/InputBox 兜底 |
 
 ---
 
 ## 7. 建议实施顺序
 
-1. **P0-1 Java 桥**：复制 10 个 Java 文件 → 改 `build.sh` → 改 `BridgeMain`（metadata 分支 + `writeErr`）→ `npm run build:bridge` → jar 校验。
-2. **P0-2 SDK**：`types.ts` → `develop.ts`（解析/补丁/测试）→ `metadata.ts` → `services.ts` → `index.ts`。
-3. **P0-3 宿主 UI**：`java-source.ts` → `server-profiles.ts` → `command-router.ts` 三个命令 → `package.json` 菜单。
-4. **P0-4 验证**：`npm run typecheck` → `npx vitest run ...` → `npm run build` → 手工验收（无域工程）。
-5. **P1**：MCP 两工具 + `tool-exec.ts` + 测试/文档计数；下载前域选择；SCM 标题栏。
+1. **P0-1 Java 桥**：复制 10 个 Java 文件 → 改 `build.sh` → 改 `BridgeMain`（metadata 分支 + `writeErr`；不新增 `download` 域参数）→ `npm run build:bridge` → jar 校验。
+2. **P0-2 SDK**：`types.ts`（`metadataDomain?` 只读字段）→ `develop.ts`（解析 + `writeDevelop` 保留旧值）→ `metadata.ts` → `services.ts` → `index.ts`。
+3. **P0-3 宿主 UI**：`java-source.ts` → `server-profiles.ts` → `command-router.ts` 两个命令 → `package.json` 菜单。
+4. **P0-4 验证**：`npm run typecheck` → `npx vitest run ...` → `npm run build` → 手工验收（VF 工程无 `.develop` 域）。
+5. **P1**：MCP 两工具 + `tool-exec.ts` + 测试/文档计数；不做下载前域选择，不做 SCM 标题栏。
 6. **联调**：真实服务器只读 `listDomains` → 测试域 `registerFunction` → `listFunctions` 验证；记录服务端版本与 DTO 差异。
