@@ -13,7 +13,8 @@
 - **编译**：「编译项目（本地）」用 JDK javac 编译 `src/**`→`bin/`；「编译单类（云端）」调 `compileSingleCode` 并以诊断标记到编辑器行（波浪线 + 问题面板）。
 - **启动调试**：把当前类发到云端运行（`startDebugJava`），在「BAP 调试」输出通道逐行显示 trace 与执行结果。
 - **单元测试**：先 javac 编译、再 JUnit Platform（`junit-platform-console-standalone`）跑 `bin/` 下的测试类；输出到「BAP 单元测试」通道，并给测试类透传 `BAP_*`/`SILENT_BAP_*` 属性以连服务器。
-- **AI / MCP 集成**：注册 MCP server（id=`bap`），把云工程能力暴露为 **18 个工具**（工作区信息/刷新/提交/发布/编译/单测/调试/历史/依赖/下载/重定向/项目列表/取云端当前文件等），供 Claude Code / Codex / Copilot 调用；配套技能 `skill/bap-vscode-mcp/`。无 `.develop` 时以引导模式启动，仅暴露自举工具。
+- **规则函数注册**：Java 编辑器右键把当前方法或整个类注册为 BAP 规则函数；业务域自动读取 VotaForge `.votaforge/server-profiles.json` 当前 profile 的 `busDomainCode`，无 VF 配置时只读回退 `.develop` 的 `MetadataDomain`，再否则从服务器候选列表选择（仅本会话缓存）。绝不回写 `.develop`；服务端按云端代码扫描，未提交改动不生效；目标方法需带 `@MethodDeclare` 与 `@FuncDeclare` 注解。
+- **AI / MCP 集成**：注册 MCP server（id=`bap`），把云工程能力暴露为 **20 个工具**（工作区信息/刷新/提交/发布/编译/单测/调试/历史/依赖/下载/重定向/项目列表/取云端当前文件/规则函数注册等），供 Claude Code / Codex / Copilot 调用；配套技能 `skill/bap-vscode-mcp/`。无 `.develop` 时以引导模式启动，仅暴露自举工具。
 - **Reset Agent Instructions**：重建工程根 `CLAUDE.md` / `AGENTS.md`（内容依据插件实际 MCP 工具与技能），按 BAP 标记段合并、保留用户已有内容；同时为 Claude Code（`.mcp.json`）与 Codex（`.codex/config.toml`）写入 MCP 配置。损坏的 `.mcp.json` 会跳过并警告，不会重建或覆盖。
 - **安装技能**：`BAP: Install Skills` 把随扩展打包的全部 skill 复制到 `<VotaForge 根>/.votaforge/skill/`（枚举目录，不写死技能名；覆盖前模态确认，绝不自动安装）。
 - **检查更新**：启动时后台检查 + 命令面板「检查更新」，检测手动 `.vsix` 安装的新版本。
@@ -40,8 +41,8 @@ apps/
 
 ## AI 集成（MCP）
 
-- 插件注册 MCP server（id=`bap`），暴露 **18 个**云工程工具（一个 MCP tool ↔ 一个 `bapIde.*` 命令）；配套技能 `skill/bap-vscode-mcp/`（`SKILL.md` + `references/`，说明 AI 如何调用）。
-- **工作区级 vs 工程级**：`workspaceInfo` / `listProjects` / `downloadProject` 是工作区级工具；其余 15 个是工程级，均接受可选 `project`（projectId / projectUuid（忽略大小写）/ 工程名）。窗口内只有一个后端工程时可省略；多工程省略返回 `AMBIGUOUS` 与候选，先调 `workspaceInfo` 再显式指定。**不会**回退到活动编辑器或上次使用的工程。
+- 插件注册 MCP server（id=`bap`），暴露 **20 个**云工程工具（一个 MCP tool ↔ 一个 `bapIde.*` 命令）；配套技能 `skill/bap-vscode-mcp/`（`SKILL.md` + `references/`，说明 AI 如何调用）。
+- **工作区级 vs 工程级**：`workspaceInfo` / `listProjects` / `downloadProject` 是工作区级工具；其余 17 个是工程级，均接受可选 `project`（projectId / projectUuid（忽略大小写）/ 工程名）。窗口内只有一个后端工程时可省略；多工程省略返回 `AMBIGUOUS` 与候选，先调 `workspaceInfo` 再显式指定。**不会**回退到活动编辑器或上次使用的工程。
 - **返回结构**：工程级工具统一返回 `{ project: { projectId, displayName, root }, result }`；工作区级工具不包。错误含 code / 候选时末尾附 `BAP_MCP_ERROR_META: {...}` 行。
 - **引导模式**：窗口至少有一个 workspace folder、但没有 `.develop` 时，MCP 只暴露 `workspaceInfo` / `listProjects` / `downloadProject`；先 `downloadProject`，把目录加入工作区并重载窗口，完整工具集才生效（工具列表在 MCP 进程启动时固定；重载后宿主会通知刷新，外部客户端自动重连并重新拉取）。`workspaceInfo.mcp.reloadRequired` 为 true 时同样需要重载。
 - **启用 AI 客户端**：在 BAP 工程（含 `.develop`）里执行命令面板 `BAP: Reset Agent Instructions` —— 按 BAP 标记段合并 `CLAUDE.md` / `AGENTS.md`（保留用户已有内容），并写入：

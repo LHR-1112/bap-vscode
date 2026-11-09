@@ -1,17 +1,17 @@
 ---
 name: bap-vscode-mcp
-description: 使用 BAP IDE（VS Code 插件）注册的 MCP server，对窗口内 0..N 个 BAP 云工程执行云端操作——workspaceInfo 工作区/工程概览、刷新差异、提交、发布、编译、单元测试、调试、历史查询、获取云端当前代码、更新依赖、重定向、下载工程等。适用于当前工作区包含一个或多个 BAP 云工程（存在 .develop），或尚无后端工程、需要通过 MCP 下载工程自举（引导模式）的场景；多工程时用可选 project 参数（projectId / projectUuid / 工程名）选择目标。不适用于规则函数开发、HTTP 接口开发、平台部署、或纯 CLI 场景（应改用 bapdev-cli 技能），也不适用于 IDE 菜单操作说明。
+description: 使用 BAP IDE（VS Code 插件）注册的 MCP server，对窗口内 0..N 个 BAP 云工程执行云端操作——workspaceInfo 工作区/工程概览、刷新差异、提交、发布、编译、单元测试、调试、历史查询、获取云端当前代码、更新依赖、重定向、下载工程、注册规则函数等。适用于当前工作区包含一个或多个 BAP 云工程（存在 .develop），或尚无后端工程、需要通过 MCP 下载工程自举（引导模式）的场景；多工程时用可选 project 参数（projectId / projectUuid / 工程名）选择目标。不适用于规则函数业务开发（**注册已有类/方法为规则函数**可用本技能）、HTTP 接口开发、平台部署、或纯 CLI 场景（应改用 bapdev-cli 技能），也不适用于 IDE 菜单操作说明。
 ---
 
 # BAP IDE MCP 技能
 
-在 VS Code 工作区中，BAP IDE 插件会注册一个 MCP server（id=`bap`），把窗口内 0..N 个 BAP 后端云工程的能力暴露成 MCP 工具（共 18 个），供 Claude Code / Codex / Copilot 调用。本技能说明如何用这些工具，包括多工程目标选择与引导模式自举。
+在 VS Code 工作区中，BAP IDE 插件会注册一个 MCP server（id=`bap`），把窗口内 0..N 个 BAP 后端云工程的能力暴露成 MCP 工具（共 20 个），供 Claude Code / Codex / Copilot 调用。本技能说明如何用这些工具，包括多工程目标选择与引导模式自举。
 
 ## 适用范围
 
 适用：
 
-- 当前工作区包含一个或多个 BAP 云工程（任意 workspace folder 的根或其子目录存在 `.develop`），用户要求做云端操作（刷新 / 提交 / 发布 / 编译 / 单测 / 调试 / 历史 / 取当前代码 / 同步依赖）。
+- 当前工作区包含一个或多个 BAP 云工程（任意 workspace folder 的根或其子目录存在 `.develop`），用户要求做云端操作（刷新 / 提交 / 发布 / 编译 / 单测 / 调试 / 历史 / 取当前代码 / 同步依赖 / 注册规则函数）。
 - 窗口已打开工作区但还没有后端工程（引导模式），用户要求查看工作区、列出服务器工程或下载 BAP 工程。
 - 用户明确要求 "通过 MCP / 让 AI 调用 BAP 能力"。
 - 需要组合多个云工程操作完成一个上层目标（如：先 refresh 看差异，再提交，再发布）。
@@ -38,7 +38,7 @@ description: 使用 BAP IDE（VS Code 插件）注册的 MCP server，对窗口�
 ## 多工程工作区
 
 - 一个窗口内可能有 0..N 个后端工程（每个含 `.develop`）；每个工程有独立的 SCM 与云端连接，互不影响。
-- 15 个工程级工具都接受**可选** `project` 参数，取值按以下顺序解析（命中即停）：
+- 17 个工程级工具都接受**可选** `project` 参数，取值按以下顺序解析（命中即停）：
   1. `projectId` 精确匹配；
   2. `projectUuid` 匹配（忽略大小写）；
   3. `displayName` 精确匹配；
@@ -67,7 +67,7 @@ description: 使用 BAP IDE（VS Code 插件）注册的 MCP server，对窗口�
 
 ## 返回结构
 
-- 工程级工具（15 个）：成功结果为 `{ "project": { "projectId", "displayName", "root" }, "result": <原结果> }`；各工具文档「返回」描述的内容都在 `result` 内，无返回值时为 `null`。
+- 工程级工具（17 个）：成功结果为 `{ "project": { "projectId", "displayName", "root" }, "result": <原结果> }`；各工具文档「返回」描述的内容都在 `result` 内，无返回值时为 `null`。
 - 工作区级工具（`workspaceInfo` / `listProjects` / `downloadProject`）：返回原始结果，不包 envelope。
 - 错误：返回可读错误文本；当含错误码或候选工程时，末尾追加一行机器可读 meta：
   `BAP_MCP_ERROR_META: {"code":"...","candidates":[...]}`
@@ -88,7 +88,7 @@ MCP 工具通过 **工具名 + 参数对象** 调用（不是 shell 命令）。
 
 ## 工具清单
 
-共 18 个：工作区级 3 个 + 工程级 15 个。下表工程级工具均另含可选 `project` 参数（规则见「多工程工作区」）。
+共 20 个：工作区级 3 个 + 工程级 17 个。下表工程级工具均另含可选 `project` 参数（规则见「多工程工作区」）。
 
 | MCP 工具 | 用途 | 主要参数 |
 |----------|------|---------|
@@ -106,6 +106,8 @@ MCP 工具通过 **工具名 + 参数对象** 调用（不是 shell 命令）。
 | [compileFile](./references/tools/compileFile.md) | 云端编译单个类（返回诊断） | `fullClass`, `code` |
 | [debugClass](./references/tools/debugClass.md) | 云端运行单个类 | `fullClass`, `code` |
 | [testProject](./references/tools/testProject.md) | 编译并运行单元测试 | `selectClass` |
+| [registerClassRuleFunctions](./references/tools/registerClassRuleFunctions.md) | 把 Java 类的全部方法注册为 BAP 规则函数（云端写操作） | `fullClass`, `domainCode`(可选) |
+| [registerMethodRuleFunction](./references/tools/registerMethodRuleFunction.md) | 把 Java 类的某个方法注册为 BAP 规则函数（云端写操作） | `fullClass`, `methodName`, `domainCode`(可选) |
 | [redirect](./references/tools/redirect.md) | 把目标工程重定向到另一 BAP 服务器（改写 `.develop` 并重连刷新） | `uri`, `user`, `pwd`, `projectUuid` |
 | [downloadProject](./references/tools/downloadProject.md) | 连接服务器并下载 BAP 工程到工作区（引导模式自举入口；VotaForge 工作区默认落到 `<工作区>/<工程名>` 子目录；拒绝与已有工程重叠） | `uri`, `user`, `pwd`, `projectUuid`, `projectName`(可选), `targetDir`(可选) |
 | [listProjects](./references/tools/listProjects.md) | 登录后在当前环境列出可操作的项目列表 | `uri`, `user`, `pwd`(可选；无 `.develop` 时必填) |
@@ -124,6 +126,7 @@ MCP 工具通过 **工具名 + 参数对象** 调用（不是 shell 命令）。
 7. 资源文件（非 `.java`）用参数 `path`（相对 `src/res/` 的路径）而非 `fullClass`。
 8. 工具调用结果若含错误，先阅读返回的错误消息与 `BAP_MCP_ERROR_META`（发布超时场景已用长超时处理，等待更久）。
 9. 不通过本 MCP 做交互式操作（打开 diff / 文件 / 历史视图），这类需求直接走 VS Code 原生功能。
+10. 规则函数注册是云端写操作：先确认目标类/方法已提交到云端并带 `@MethodDeclare` / `@FuncDeclare`；`domainCode` 缺省时按 VF active profile `busDomainCode` → `.develop` `MetadataDomain` 回退，都没有时错误会列出可用业务域，再显式传 `domainCode` 重试。
 
 ## 技能安装与分工
 

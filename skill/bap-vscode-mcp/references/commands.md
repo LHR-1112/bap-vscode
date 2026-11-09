@@ -2,7 +2,7 @@
 
 本文档只提供导航。每个 MCP 工具的参数、工作流与返回，见 `references/tools/` 下的独立文件。
 
-共 18 个工具：`workspaceInfo` / `listProjects` / `downloadProject` 为**工作区级**，其余 15 个为**工程级**。
+共 20 个工具：`workspaceInfo` / `listProjects` / `downloadProject` 为**工作区级**，其余 17 个为**工程级**。
 
 ## 工具说明
 
@@ -20,6 +20,8 @@
 - [compileFile](./tools/compileFile.md)
 - [debugClass](./tools/debugClass.md)
 - [testProject](./tools/testProject.md)
+- [registerClassRuleFunctions](./tools/registerClassRuleFunctions.md)
+- [registerMethodRuleFunction](./tools/registerMethodRuleFunction.md)
 - [redirect](./tools/redirect.md)
 - [downloadProject](./tools/downloadProject.md)
 - [listProjects](./tools/listProjects.md)
