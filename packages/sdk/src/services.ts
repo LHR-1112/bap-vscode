@@ -9,6 +9,14 @@ import { syncLibs, type SyncProgress, type SyncResult } from './libs';
 import { compileLocalProject, resolveProjectLayout, resolveJava, type CompileResult } from './compile';
 import { buildDebugCode } from './debug';
 import { runUnitTests, type TestOptions, type TestResult } from './test';
+import {
+  metadataConnect,
+  listMetadataDomains,
+  listMetadataFunctions,
+  registerMetadataFunction,
+  registerMetadataFunctions,
+  validateMetadataDomainCode,
+} from './metadata';
 import type {
   Change,
   CJavaCode,
@@ -19,9 +27,12 @@ import type {
   CResFileDto,
   DebugResult,
   DevelopConfig,
+  DomainInfoDto,
   FileDto,
   JavaDto,
+  ListFunctionsResult,
   LvProblem,
+  RegisterFunctionResult,
   RpcInvoker,
   VersionNode,
 } from './types';
@@ -76,6 +87,15 @@ export interface BapSdk {
     probe(uri: string, user: string, pwd: string): Promise<CJavaProjectDto[]>;
     apply(profile: RelocateProfile): Promise<void>;
   };
+  /** 规则函数注册（IPanelMetadataService）。域解析在宿主层完成，SDK 只提供只读回退与候选列表。 */
+  metadata: {
+    /** 旧 .develop 的只读回退；不发起 RPC，不写文件。 */
+    configuredDomain(): string | undefined;
+    listDomains(opts?: { refresh?: boolean }): Promise<DomainInfoDto[]>;
+    listFunctions(domain: string): Promise<ListFunctionsResult>;
+    registerFunction(domain: string, fullClass: string, methodName: string): Promise<RegisterFunctionResult>;
+    registerFunctions(domain: string, fullClass: string): Promise<RegisterFunctionResult>;
+  };
   /** 丢弃变更：把变更还原到云端（MODIFIED/DELETED 用云端原版覆盖，ADDED 删除本地）。 */
   discardAll(changes: Change[]): Promise<void>;
   /** 更新依赖：同步 <workspaceRoot>/lib 到云端（按 md5 更新 + 删除云端无的本地 lib）。 */
@@ -120,6 +140,14 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
   /** 连接单飞 + epoch：disconnect/redirect 后，旧连接请求返回的结果不再写回缓存。 */
   let connectPromise: Promise<{ develop: DevelopConfig; session: SDto; projectUuid: string }> | null = null;
   let epoch = 0;
+
+  /** metadata 连接状态：以 epoch 为键；redirect/disconnect 后清零，下次调用重新 metadata.connect。 */
+  let metadataEpoch = -1;
+  /** metadata connect 单飞：并发调用只发一次，避免后一次 connect 重置先一次的在途调用。 */
+  let metadataConnectPromise: Promise<void> | null = null;
+  /** listDomains 缓存（TTL 60s）；带 epoch，redirect/disconnect 后的在途结果不得写回。 */
+  let domainCache: { t: number; epoch: number; domains: DomainInfoDto[] } | null = null;
+  const DOMAIN_TTL_MS = 60_000;
 
   /** 给变更补工程维度（多工程路由/虚拟 URI 隔离用）。 */
   const tagChanges = (list: Change[]): Change[] =>
@@ -180,6 +208,51 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
 
   async function ensureProjectUuid(): Promise<string> {
     return (await ensureConnected()).projectUuid;
+  }
+
+  /** metadata 客户端不登录：复用主连接会话，只在连接/重定向/断开后重新 connect。 */
+  async function ensureMetadataConnected(d: DevelopConfig): Promise<void> {
+    if (metadataEpoch === epoch) return;
+    if (metadataConnectPromise) return metadataConnectPromise;
+
+    const myEpoch = epoch;
+    const promise = (async () => {
+      await metadataConnect(rpc, d);
+      if (myEpoch !== epoch) {
+        // 连接期间发生 disconnect/redirect：Java 桥已 resetMetadata()，不能把旧连接标记为当前。
+        metadataEpoch = -1;
+        throw new SdkError('连接期间 .develop 已变更，请重试', 'CONNECTION_SUPERSEDED');
+      }
+      metadataEpoch = epoch;
+    })();
+    metadataConnectPromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (metadataConnectPromise === promise) metadataConnectPromise = null;
+    }
+  }
+
+  async function listDomainsImpl(refresh = false): Promise<DomainInfoDto[]> {
+    if (
+      !refresh &&
+      domainCache &&
+      domainCache.epoch === epoch &&
+      Date.now() - domainCache.t < DOMAIN_TTL_MS
+    ) {
+      return domainCache.domains;
+    }
+    const myEpoch = epoch;
+    const { develop: d } = await ensureConnected();
+    await ensureMetadataConnected(d);
+    const domains = await listMetadataDomains(rpc);
+    if (myEpoch !== epoch) {
+      // 请求期间重定向/断开：不要把旧 server 的候选写回缓存，也不返回给调用方。
+      throw new SdkError('连接期间 .develop 已变更，请重试', 'CONNECTION_SUPERSEDED');
+    }
+    domainCache = { t: Date.now(), epoch, domains };
+    log(`[metadata.listDomains] 完成，候选=${domains.length}`);
+    return domains;
   }
 
   return {
@@ -348,10 +421,22 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       /** 用给定 uri/user/pwd 连接并列出该 server 上所有工程（探测用）。 */
       async probe(uri, user, pwd) {
         log(`[redirect.probe] 开始，uri=${uri}`);
-        await rpc.connect(uri, user, pwd);
-        const list = (await rpc.call('getAllProjects')) as CJavaProjectDto[];
-        log(`[redirect.probe] 完成，工程=${list.length}`);
-        return list;
+        const myEpoch = epoch;
+        try {
+          await rpc.connect(uri, user, pwd);
+          const list = (await rpc.call('getAllProjects')) as CJavaProjectDto[];
+          log(`[redirect.probe] 完成，工程=${list.length}`);
+          return list;
+        } finally {
+          // probe 已把桥的主连接切到探测 server；无论后续 apply 还是取消，
+          // 缓存的 develop/session/metadata 都不能再当作旧 server 的有效状态。
+          if (myEpoch === epoch) epoch++;
+          cloudSnapshot = null;
+          session = null;
+          develop = null;
+          metadataEpoch = -1;
+          domainCache = null;
+        }
       },
       /** 改写 .develop + 更新历史 + 断开；下次 refresh 按新配置重连。 */
       async apply(profile) {
@@ -369,6 +454,9 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
         cloudSnapshot = null;
         session = null;
         develop = null;
+        // 不管理域：.develop 的既有 MetadataDomain 由 writeDevelop 的保留逻辑兜底。
+        metadataEpoch = -1;
+        domainCache = null;
         try {
           await rpc.disconnect();
         } catch (e) {
@@ -376,6 +464,56 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
           log(`[redirect.apply] 断开旧连接失败（已忽略）: ${e instanceof Error ? e.message : String(e)}`);
         }
         log('[redirect.apply] 完成');
+      },
+    },
+
+    metadata: {
+      /** 旧 .develop 的只读回退；不发起 RPC，不写文件。非法值视为未配置。 */
+      configuredDomain() {
+        try {
+          const domain = loadDevelop(workspaceRoot).metadataDomain;
+          return domain ? validateMetadataDomainCode(domain) : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+
+      async listDomains(opts) {
+        return listDomainsImpl(opts?.refresh ?? false);
+      },
+
+      async listFunctions(domain) {
+        const value = validateMetadataDomainCode(domain);
+        const { develop: d } = await ensureConnected();
+        await ensureMetadataConnected(d);
+        const result = await listMetadataFunctions(rpc, value);
+        log(
+          `[metadata.listFunctions] domain=${value} count=${result.functions?.length ?? 0} total=${result.totalCount ?? 0}`,
+        );
+        return result;
+      },
+
+      async registerFunction(domain, fullClass, methodName) {
+        const value = validateMetadataDomainCode(domain);
+        const { develop: d } = await ensureConnected();
+        await ensureMetadataConnected(d);
+        const result = await registerMetadataFunction(rpc, value, fullClass, methodName);
+        // 日志绝不打印密码；只记录域/类/方法/结果。
+        log(
+          `[metadata.registerFunction] domain=${value} class=${fullClass} method=${methodName} success=${result.success} count=${result.functions?.length ?? 0}`,
+        );
+        return result;
+      },
+
+      async registerFunctions(domain, fullClass) {
+        const value = validateMetadataDomainCode(domain);
+        const { develop: d } = await ensureConnected();
+        await ensureMetadataConnected(d);
+        const result = await registerMetadataFunctions(rpc, value, fullClass);
+        log(
+          `[metadata.registerFunctions] domain=${value} class=${fullClass} success=${result.success} count=${result.functions?.length ?? 0}`,
+        );
+        return result;
       },
     },
 
@@ -498,6 +636,8 @@ export function createBapSdk(options: BapSdkOptions): BapSdk {
       cloudSnapshot = null;
       session = null;
       develop = null;
+      metadataEpoch = -1;
+      domainCache = null;
       await rpc.disconnect();
     },
   };

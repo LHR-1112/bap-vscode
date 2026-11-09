@@ -74,6 +74,10 @@ public class BapRpcClient {
             }
             rpcWrapper = null;
         }
+        // 断开后清空连接信息：避免 metadata.connect 在 disconnect 之后仍把旧 URI 当作已连接。
+        this.currentUri = null;
+        this.currentUser = null;
+        this.currentPwd = null;
     }
 
     public boolean isConnected() {

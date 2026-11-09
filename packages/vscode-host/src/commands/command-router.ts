@@ -6,19 +6,34 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { Change, CJavaProjectDto, RelocateProfile } from '@bap/sdk';
+import type {
+  BapSdk,
+  Change,
+  CJavaProjectDto,
+  DomainInfoDto,
+  RelocateProfile,
+} from '@bap/sdk';
 import type { BridgeLaunchConfig } from '@bap/rpc';
 import {
   addRelocateHistory,
   loadDevelop,
   loadRelocateHistory,
   removeRelocateHistory,
+  validateMetadataDomainCode,
 } from '@bap/sdk';
 import type { BackendProjectRegistry, ProjectRequest } from '../projects/project-registry';
 import type { BackendProjectContext } from '../projects/project-context';
 import { ProjectResolutionError, isProjectResolutionError } from '../projects/project-errors';
 import { readProjectIdentity } from '../projects/project-identity';
-import { deriveFullClass } from '../projects/project-paths';
+import { deriveFullClass, isSamePath } from '../projects/project-paths';
+import { readActiveBusDomainCode } from '../projects/server-profiles';
+import {
+  appendNestedClass,
+  deriveFullClassFromSource,
+  isValidFullClassName,
+  isValidMethodName,
+  parseJavaPackage,
+} from '../java-source';
 import { isToolCall, execTool, wrapProjectResult, type McpToolCtx, type ToolArg } from '../mcp/tool-exec';
 import { isProjectScopedTool } from '../mcp/tools';
 import { collectAgentProjectInfo, buildAgentFileContent, type AgentGenerationContext } from '../agent/agent-instructions';
@@ -136,15 +151,352 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
       sdk: ctx.ensureSdk(),
       bapScm: ctx.ensureScm(),
       workspaceRoot: ctx.root,
+      workspaceFolders: (vscode.workspace.workspaceFolders ?? [])
+        .filter((f) => f.uri.scheme === 'file')
+        .map((f) => f.uri.fsPath),
       log,
       projectId: ctx.projectId,
       displayName: ctx.displayName,
       runWrite: (fn) => ctx.runWrite(fn),
       runExclusive: (fn) => ctx.runExclusive(fn),
       afterRedirect: () => {
+        domainSelectionCache.delete(ctx.projectId);
         ctx.adoptIdentity(readProjectIdentity(ctx.root));
         registry.recomputeDuplicates();
       },
+    };
+  }
+
+  // ---- MetadataDomain / 规则函数注册 ----
+
+  /** 非 VF 工程的 QuickPick 选择只在本会话缓存，绝不写 .develop。 */
+  const domainSelectionCache = new Map<string, string>();
+
+  /** 校验域 code；非法时记 debug（不含密码）并返回 undefined，由调用方回退。 */
+  function tryMetadataDomain(code: string | undefined, source: 'vf' | 'develop'): string | undefined {
+    if (!code) return undefined;
+    try {
+      return validateMetadataDomainCode(code);
+    } catch (e) {
+      log.debug(`[metadata] ${source} 域非法，忽略: ${errorMessage(e)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * 解析 MetadataDomain（只读，绝不写 .develop）：
+   * 1) VotaForge 当前 profile 的 busDomainCode（权威来源）；
+   * 2) 旧 .develop 的 MetadataDomain（只读回退）；
+   * 3) 本会话 QuickPick 缓存（仅非 VF 兜底）；
+   * 4) listDomains() + QuickPick（网络调用入 runExclusive，QuickPick 在队列外）。
+   */
+  async function ensureMetadataDomain(
+    ctx: BackendProjectContext,
+    sdk: BapSdk,
+  ): Promise<string | undefined> {
+    const workspaceFolderPaths = (vscode.workspace.workspaceFolders ?? [])
+      .filter((f) => f.uri.scheme === 'file')
+      .map((f) => f.uri.fsPath);
+    const vfRoot = findVfWorkspaceRoot(ctx.root, workspaceFolderPaths);
+    if (vfRoot) {
+      const domain = tryMetadataDomain(readActiveBusDomainCode(vfRoot), 'vf');
+      if (domain) {
+        log.debug(`[metadata] domain=${domain} source=vf:${path.basename(vfRoot)} [${ctx.displayName}]`);
+        return domain;
+      }
+      log.debug(`[metadata] VF 根 ${vfRoot} 未提供有效 busDomainCode，回退 .develop/listDomains`);
+    }
+
+    const configured = tryMetadataDomain(sdk.metadata.configuredDomain(), 'develop');
+    if (configured) {
+      log.debug(`[metadata] domain=${configured} source=develop [${ctx.displayName}]`);
+      return configured;
+    }
+
+    const cached = domainSelectionCache.get(ctx.projectId);
+    if (cached) return cached;
+
+    const domains = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'BAP: 读取业务域列表…' },
+      () => ctx.runExclusive(() => sdk.metadata.listDomains({ refresh: true })),
+    );
+    if (domains.length === 0) {
+      void vscode.window.showWarningMessage(
+        'BAP: 服务器未返回任何业务域（MetadataDomain）。请检查 VotaForge server-profiles.json 的 activeProfileId/busDomainCode，或确认服务器已启用 panelxpro 元数据服务、账号有权限。',
+      );
+      return undefined;
+    }
+
+    const items = domains
+      .filter(
+        (d): d is DomainInfoDto & { code: string } =>
+          typeof d.code === 'string' && d.code.trim().length > 0,
+      )
+      .map((d) => ({
+        label: d.code,
+        description: d.name || '',
+        detail: d.description || '',
+        code: d.code,
+      }));
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: 'BAP: 选择 MetadataDomain',
+      placeHolder: 'VotaForge 工程请优先配置 server-profiles.json 的 active profile；本次选择不会写入 .develop',
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked?.code) return undefined;
+    const domain = validateMetadataDomainCode(picked.code);
+    domainSelectionCache.set(ctx.projectId, domain);
+    log.debug(`[metadata] domain=${domain} source=listDomains [${ctx.displayName}]`);
+    return domain;
+  }
+
+  /** 读取 Java 源文件；失败返回空串（后续走 InputBox 兜底）。 */
+  function readJavaSource(absPath: string): string {
+    try {
+      return fs.readFileSync(absPath, 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  interface MethodHit {
+    kind: 'method' | 'constructor';
+    name: string;
+    /** 从最外层到方法所在类的类名链（含顶层类）。 */
+    classChain: string[];
+    /** 同类中是否存在同名重载（仅方法有意义）。 */
+    overloaded: boolean;
+  }
+
+  interface MethodTarget {
+    fullClass: string;
+    methodName: string;
+    dirty: boolean;
+    overloaded: boolean;
+  }
+
+  type AnySymbol = vscode.DocumentSymbol | vscode.SymbolInformation;
+
+  function isSymbolInfo(s: AnySymbol): s is vscode.SymbolInformation {
+    return 'location' in s;
+  }
+
+  function isClassContainer(kind: vscode.SymbolKind): boolean {
+    return (
+      kind === vscode.SymbolKind.Class ||
+      kind === vscode.SymbolKind.Interface ||
+      kind === vscode.SymbolKind.Enum ||
+      kind === vscode.SymbolKind.Struct ||
+      kind === vscode.SymbolKind.Object
+    );
+  }
+
+  /** 在 DocumentSymbol 树中递归查找包含光标的 Method/Constructor，并记录类链。 */
+  function findDocumentSymbolHit(
+    symbols: readonly vscode.DocumentSymbol[],
+    position: vscode.Position,
+    classChain: string[],
+  ): MethodHit | undefined {
+    for (const s of symbols) {
+      if (s.kind !== vscode.SymbolKind.Method && s.kind !== vscode.SymbolKind.Constructor) continue;
+      if (!s.range.contains(position)) continue;
+      const overloaded =
+        s.kind === vscode.SymbolKind.Method &&
+        symbols.filter((o) => o.kind === vscode.SymbolKind.Method && o.name === s.name).length > 1;
+      return {
+        kind: s.kind === vscode.SymbolKind.Constructor ? 'constructor' : 'method',
+        name: s.name,
+        classChain,
+        overloaded,
+      };
+    }
+    for (const s of symbols) {
+      if (!isClassContainer(s.kind) || !s.children || s.children.length === 0) continue;
+      const hit = findDocumentSymbolHit(s.children, position, [...classChain, s.name]);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
+  /** 未命中方法符号时，仍取光标所在的类链（嵌套类兜底用）。 */
+  function findClassChainAt(
+    symbols: readonly vscode.DocumentSymbol[],
+    position: vscode.Position,
+    classChain: string[],
+  ): string[] | undefined {
+    for (const s of symbols) {
+      if (!isClassContainer(s.kind)) continue;
+      if (!s.range.contains(position)) continue;
+      const nested = findClassChainAt(s.children ?? [], position, [...classChain, s.name]);
+      return nested ?? [...classChain, s.name];
+    }
+    return undefined;
+  }
+
+  /** 有些 provider 返回扁平的 SymbolInformation[]；按 location 范围取最内层命中。 */
+  function findFlatSymbolHit(
+    symbols: readonly vscode.SymbolInformation[],
+    position: vscode.Position,
+    pkg: string | undefined,
+  ): MethodHit | undefined {
+    const candidates = symbols.filter(
+      (s) =>
+        (s.kind === vscode.SymbolKind.Method || s.kind === vscode.SymbolKind.Constructor) &&
+        s.location.range.contains(position),
+    );
+    if (candidates.length === 0) return undefined;
+    const hit = candidates.reduce((a, b) =>
+      a.location.range.contains(b.location.range.start) ? b : a,
+    );
+    const container = hit.containerName || '';
+    let classChain: string[] = [];
+    if (container) {
+      const prefix = pkg ? `${pkg}.` : '';
+      const rel = prefix && container.startsWith(prefix) ? container.slice(prefix.length) : container;
+      classChain = rel.split('.').filter(Boolean);
+    }
+    const overloaded =
+      hit.kind === vscode.SymbolKind.Method &&
+      symbols.filter(
+        (s) =>
+          s.kind === vscode.SymbolKind.Method &&
+          s.name === hit.name &&
+          (s.containerName || '') === container,
+      ).length > 1;
+    return {
+      kind: hit.kind === vscode.SymbolKind.Constructor ? 'constructor' : 'method',
+      name: hit.name,
+      classChain,
+      overloaded,
+    };
+  }
+
+  /** 执行 DocumentSymbolProvider，1.5 s 超时或失败返回 undefined（不阻断注册）。 */
+  async function documentSymbolsWithTimeout(uri: vscode.Uri): Promise<AnySymbol[] | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), 1500);
+    });
+    try {
+      const result = await Promise.race([
+        Promise.resolve(
+          vscode.commands.executeCommand<AnySymbol[]>('vscode.executeDocumentSymbolProvider', uri),
+        ).catch(() => undefined),
+        timeout,
+      ]);
+      return result;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 解析方法注册目标：
+   * 1) 按 URI 对齐可见/活动编辑器（避免分屏漂移），都没有则打开文档；
+   * 2) DocumentSymbol 递归找光标处的 Method/Constructor（构造器拒绝）；
+   * 3) 光标单词兜底；
+   * 4) InputBox 兜底；
+   * 5) 全类名 = package + stem，嵌套类用点号链拼接；拿不到则 InputBox。
+   */
+  async function resolveMethodTarget(
+    ctx: BackendProjectContext,
+    absPath: string,
+    _arg: unknown,
+  ): Promise<MethodTarget | undefined> {
+    const activeEditor = vscode.window.activeTextEditor;
+    const alignedEditor =
+      (activeEditor && isSamePath(activeEditor.document.uri.fsPath, absPath) ? activeEditor : undefined) ??
+      vscode.window.visibleTextEditors.find((e) => isSamePath(e.document.uri.fsPath, absPath));
+    const doc =
+      alignedEditor?.document ?? (await vscode.workspace.openTextDocument(vscode.Uri.file(absPath)));
+    const position = alignedEditor?.selection.active ?? new vscode.Position(0, 0);
+    const source = readJavaSource(absPath) || doc.getText();
+    const pkg = parseJavaPackage(source);
+
+    const symbols = await documentSymbolsWithTimeout(doc.uri);
+    let hit: MethodHit | undefined;
+    let classChain: string[] = [];
+    if (symbols && symbols.length > 0) {
+      if (symbols.every(isSymbolInfo)) {
+        hit = findFlatSymbolHit(symbols as vscode.SymbolInformation[], position, pkg);
+        classChain = hit?.classChain ?? [];
+      } else {
+        const tree = symbols as vscode.DocumentSymbol[];
+        hit = findDocumentSymbolHit(tree, position, []);
+        classChain = hit?.classChain ?? (findClassChainAt(tree, position, []) ?? []);
+      }
+    }
+
+    if (hit?.kind === 'constructor') {
+      void vscode.window.showInformationMessage(
+        'BAP: 构造器不能注册为规则函数，请把光标放在普通方法上',
+      );
+      return undefined;
+    }
+
+    let methodName = hit?.kind === 'method' && isValidMethodName(hit.name) ? hit.name : undefined;
+
+    if (!methodName) {
+      const wordRange = doc.getWordRangeAtPosition(position);
+      const word = wordRange ? doc.getText(wordRange) : '';
+      if (word && isValidMethodName(word)) methodName = word;
+    }
+
+    if (!methodName) {
+      const input = await vscode.window.showInputBox({
+        title: 'BAP: 输入要注册的方法名',
+        prompt: '例如 hello',
+        validateInput: (v) => (isValidMethodName(v.trim()) ? undefined : '非法方法名'),
+      });
+      if (!input) return undefined;
+      methodName = input.trim();
+    }
+    if (!methodName) return undefined;
+
+    let fullClass = deriveFullClassFromSource(ctx.root, absPath, source);
+    let nestedInvalid = false;
+    if (fullClass && classChain.length > 0) {
+      const topName = fullClass.split('.').pop() ?? '';
+      let base = fullClass;
+      let nested = classChain;
+      if (classChain[0] === topName) {
+        nested = classChain.slice(1);
+      } else if (pkg) {
+        // 同一文件有多个顶层类：以 package + 符号链的第一个类为基准。
+        base = `${pkg}.${classChain[0]}`;
+        nested = classChain.slice(1);
+      } else {
+        base = classChain[0];
+        nested = classChain.slice(1);
+      }
+      const nestedFull = appendNestedClass(base, nested);
+      if (nestedFull) fullClass = nestedFull;
+      else nestedInvalid = true;
+    }
+    if (!fullClass || nestedInvalid) {
+      const input = await vscode.window.showInputBox({
+        title: 'BAP: 输入 Java 全类名',
+        prompt: nestedInvalid
+          ? '无法从嵌套类符号推导全类名，请确认完整类名'
+          : '例如 com.example.Foo',
+        value: fullClass ?? '',
+        validateInput: (v) => (isValidFullClassName(v.trim()) ? undefined : '非法全类名'),
+      });
+      if (!input) return undefined;
+      fullClass = input.trim();
+    }
+    if (!fullClass || !isValidFullClassName(fullClass)) {
+      void vscode.window.showErrorMessage(`BAP: 非法全类名：${fullClass ?? ''}`);
+      return undefined;
+    }
+
+    return {
+      fullClass,
+      methodName,
+      dirty: doc.isDirty,
+      overloaded: hit?.kind === 'method' ? hit.overloaded : false,
     };
   }
 
@@ -334,7 +686,8 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
       toolCommand('refresh', async (arg) => {
         const contexts = await resolveManyForUi(arg, '刷新', false);
         const results = await runMany('刷新', contexts.map((context) => ({ context })), async (ctx) => {
-          const changes = await ctx.ensureScm().refresh(true);
+          // 只读网络调用：与同工程长任务（如规则函数注册）串行，避免单线程 Java 桥排队超时。
+          const changes = await ctx.runExclusive(() => ctx.ensureScm().refresh(true));
           return changes.filter((c) => c.status !== 'NORMAL').length;
         });
         const total = results.reduce((n, r) => n + (r.ok ? r.value : 0), 0);
@@ -667,6 +1020,96 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
       }),
     ),
 
+    command(
+      'bapIde.metadata.registerClassFunctions',
+      toolCommand('registerClassRuleFunctions', async (arg) => {
+        const ctx = await resolveOneForUi(arg, '注册类规则函数', true);
+        const absPath = changePathOrArg(ctx, arg);
+        if (!isFileJavaArg(arg, absPath)) {
+          void vscode.window.showInformationMessage('BAP: 请选择磁盘上的 Java 源文件');
+          return;
+        }
+        const sdk = ctx.ensureSdk();
+        const source = readJavaSource(absPath);
+        const fullClass =
+          deriveFullClassFromSource(ctx.root, absPath, source) ??
+          (await vscode.window.showInputBox({
+            title: 'BAP: 输入 Java 全类名',
+            prompt: '例如 com.example.Foo',
+            validateInput: (v) => (isValidFullClassName(v.trim()) ? undefined : '非法全类名'),
+          }))?.trim();
+        if (!fullClass) return;
+
+        const domain = await ensureMetadataDomain(ctx, sdk);
+        if (!domain) return;
+
+        const ok = await vscode.window.showWarningMessage(
+          `将把 ${fullClass} 的全部方法注册到业务域 ${domain}。服务端按云端代码扫描；未提交/未保存的改动不会生效。继续？`,
+          { modal: true },
+          '注册',
+        );
+        if (ok !== '注册') return;
+
+        const result = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `BAP: 注册 ${fullClass} 的规则函数…`,
+            cancellable: false,
+          },
+          () => ctx.runWrite(() => sdk.metadata.registerFunctions(domain, fullClass)),
+        );
+        if (!result.success) throw new Error(result.message || '服务器返回 success=false');
+        const count = result.functions?.length ?? 0;
+        void vscode.window.showInformationMessage(
+          `BAP: 已注册 ${fullClass} 的 ${count} 个规则函数（业务域 ${domain}）`,
+        );
+        log.debug(`[metadata.registerFunctions] ${fullClass} domain=${domain} count=${count}`);
+      }),
+    ),
+
+    command(
+      'bapIde.metadata.registerMethodFunction',
+      toolCommand('registerMethodRuleFunction', async (arg) => {
+        const ctx = await resolveOneForUi(arg, '注册方法规则函数', true);
+        const absPath = changePathOrArg(ctx, arg);
+        if (!isFileJavaArg(arg, absPath)) {
+          void vscode.window.showInformationMessage('BAP: 请选择磁盘上的 Java 源文件');
+          return;
+        }
+        const target = await resolveMethodTarget(ctx, absPath, arg);
+        if (!target) return;
+        const { fullClass, methodName } = target;
+
+        const sdk = ctx.ensureSdk();
+        const domain = await ensureMetadataDomain(ctx, sdk);
+        if (!domain) return;
+
+        // 与 IDEA 一致：方法注册不弹确认框，直接进度提示。
+        // 服务端扫描云端代码，未保存/未提交的改动不会生效，只提示不阻断。
+        const dirtyHint = target.dirty
+          ? '（文件有未保存改动；服务端按云端代码注册，未提交改动不生效）'
+          : '';
+        const result = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `BAP: 注册 ${fullClass}.${methodName}…${dirtyHint}`,
+            cancellable: false,
+          },
+          () => ctx.runWrite(() => sdk.metadata.registerFunction(domain, fullClass, methodName)),
+        );
+        if (!result.success) throw new Error(result.message || '服务器返回 success=false');
+        const count = result.functions?.length ?? 0;
+        void vscode.window.showInformationMessage(
+          `BAP: 已注册 ${fullClass}.${methodName} 为规则函数（业务域 ${domain}${count ? `，返回 ${count} 条` : ''}）`,
+        );
+        if (target.overloaded) {
+          void vscode.window.showWarningMessage(
+            `BAP: ${fullClass} 中存在同名重载方法；服务端按方法名注册，可能同时注册多个重载。`,
+          );
+        }
+      }),
+    ),
+
     command('bapIde.workspaceInfo', async (arg) => {
       const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => ({
         name: f.name,
@@ -945,6 +1388,8 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
       // .develop 已改写：在本工程串行队列内立即采纳新身份，避免后续写操作被判 stale。
       ctx.adoptIdentity(readProjectIdentity(ctx.root));
     });
+    // 旧 server 的 QuickPick 选择不能带到新 server。
+    domainSelectionCache.delete(ctx.projectId);
     registry.recomputeDuplicates();
     await scm.refresh(true, { throwOnError: true });
     void vscode.window.setStatusBarMessage(
@@ -1040,6 +1485,13 @@ export function registerProjectCommands(opts: ProjectCommandOptions): vscode.Dis
   /** 编译/调试/测试用：优先取 SCM 变更的绝对路径，否则从参数解析。 */
   function changePathOrArg(ctx: BackendProjectContext, arg: unknown): string | undefined {
     return findChange(ctx, arg)?.absolutePath ?? fsPathFromArg(arg);
+  }
+
+  /** 规则函数注册只接受磁盘上的 Java 源文件；拒绝 diff/虚拟文档 URI。 */
+  function isFileJavaArg(arg: unknown, absPath: string | undefined): absPath is string {
+    if (!absPath || !path.isAbsolute(absPath) || !absPath.toLowerCase().endsWith('.java')) return false;
+    const uri = uriFromArg(arg);
+    return !uri || uri.scheme === 'file';
   }
 
   async function runTest(

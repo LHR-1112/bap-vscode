@@ -25,7 +25,7 @@ async function main() {
   }
 
   const launch: BridgeLaunchConfig = {
-    classpath: [path.join(distLib, '*')],
+    classpath: [path.join(distLib, 'bridge-main.jar'), path.join(distLib, '*')],
     mainClass: 'com.bap.dev.BridgeMain',
   };
   const rpc = createRpcClient({ launch });

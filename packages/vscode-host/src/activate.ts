@@ -56,7 +56,15 @@ export function activateScm(
   const iconDir = path.join(context.extensionPath, 'resources', 'scm-icons');
   const bapScm = createBapScmProvider(sdk, workspaceRoot, { autoRefresh: opts.autoRefresh, iconDir });
   // MCP 工具执行上下文（tool 分支经 execTool 非交互直调 SDK/bapScm）
-  const mcpCtx: McpToolCtx = { sdk, bapScm, workspaceRoot, log };
+  const mcpCtx: McpToolCtx = {
+    sdk,
+    bapScm,
+    workspaceRoot,
+    workspaceFolders: (vscode.workspace.workspaceFolders ?? [])
+      .filter((f) => f.uri.scheme === 'file')
+      .map((f) => f.uri.fsPath),
+    log,
+  };
   log.debug('registerOriginalProvider...');
   const originalProvider = registerOriginalProvider(sdk);
   const historyContent = registerHistoryContentProvider(sdk);

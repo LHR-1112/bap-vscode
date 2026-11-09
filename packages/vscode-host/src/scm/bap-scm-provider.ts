@@ -49,6 +49,8 @@ export interface BapScmProviderOptions {
   iconDir?: string;
   /** 路径是否归本工程所有（多工程 watcher 防跨工程刷新）。 */
   ownsPath?: (fsPath: string) => boolean;
+  /** 自动刷新（保存/watcher）的串行入口；宿主注入工程队列，避免与长任务抢单线程 Java 桥。 */
+  autoRefreshRunner?: <T>(fn: () => Promise<T>) => Promise<T>;
   /** 刷新完成回调（宿主更新文件角标）。 */
   onChanges?: (changes: Change[]) => void;
   /** provider 释放回调（宿主清理角标 owner）。 */
@@ -293,7 +295,13 @@ export function createBapScmProvider(
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = undefined;
-      void refresh(force).catch(() => undefined);
+      const run = () => refresh(force).catch(() => undefined);
+      try {
+        const pending = opts.autoRefreshRunner ? opts.autoRefreshRunner(run) : run();
+        void pending.catch(() => undefined);
+      } catch {
+        // 工程上下文已释放/失效：自动刷新静默放弃。
+      }
     }, opts.debounceMs ?? 500);
   }
 

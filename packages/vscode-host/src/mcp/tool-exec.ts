@@ -1,13 +1,21 @@
 // MCP 工具执行器：一个 tool ↔ 一个 bapIde.* 命令，但工具路径走这里——非交互、直接调 SDK/bapScm，
 // 返回可 JSON 序列化的结果（不开弹窗/通道/视图）。宿主 dispatch 仍是 executeCommand(command, {__tool, ...})。
 // 多工程：宿主为解析出的工程构造 McpToolCtx（带 runWrite/runExclusive），写操作先过工程身份校验。
-import type { BapSdk, Change } from '@bap/sdk';
+import { validateMetadataDomainCode, type BapSdk, type Change } from '@bap/sdk';
 import type { BapScmProviderHandle } from '../scm/bap-scm-provider';
+import { findVfWorkspaceRoot } from '../backend-projects';
+import { readActiveBusDomainCode } from '../projects/server-profiles';
+import { isValidFullClassName, isValidMethodName } from '../java-source';
 
 export interface McpToolCtx {
   sdk: BapSdk;
   bapScm: BapScmProviderHandle;
   workspaceRoot: string;
+  /**
+   * 窗口内 file scheme 的 workspace folder 绝对路径（由命令路由注入）。
+   * 用于定位 VotaForge 根；MCP 路径不直接依赖 vscode，便于单测。
+   */
+  workspaceFolders?: readonly string[];
   log: { debug(msg: string): void; error(msg: string): void };
   /** 解析出的工程 ID / 展示名（用于工具结果的 project envelope）。 */
   projectId?: string;
@@ -63,6 +71,62 @@ const exclusive = <T>(ctx: McpToolCtx, fn: () => Promise<T>): Promise<T> =>
   ctx.runExclusive ? ctx.runExclusive(fn) : fn();
 const write = <T>(ctx: McpToolCtx, fn: () => Promise<T>): Promise<T> =>
   ctx.runWrite ? ctx.runWrite(fn) : fn();
+
+function requireString(a: ToolArg, key: string): string {
+  const v = typeof a[key] === 'string' ? (a[key] as string).trim() : '';
+  if (!v) throw new Error(`缺少参数 ${key}`);
+  return v;
+}
+
+/** 校验域 code；非法时记 debug（不含密码）并返回 undefined，由调用方回退。 */
+function tryMetadataDomainForTool(
+  ctx: McpToolCtx,
+  code: string | undefined,
+  source: string,
+): string | undefined {
+  if (!code) return undefined;
+  try {
+    return validateMetadataDomainCode(code);
+  } catch (e) {
+    ctx.log.debug(`[metadata] ${source} 域非法，忽略: ${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
+  }
+}
+
+/**
+ * MCP 路径的域解析（只读，不弹 QuickPick、不写 .develop）：
+ * 显式 domainCode > VF active profile busDomainCode > .develop MetadataDomain；
+ * 都没有时读取候选域并抛错，让 AI 带 domainCode 重试。
+ */
+async function resolveMetadataDomainForTool(ctx: McpToolCtx, a: ToolArg): Promise<string> {
+  const explicit = typeof a.domainCode === 'string' ? a.domainCode.trim() : '';
+  if (explicit) return validateMetadataDomainCode(explicit);
+
+  const vfRoot = findVfWorkspaceRoot(ctx.workspaceRoot, ctx.workspaceFolders ?? []);
+  const vfDomain = tryMetadataDomainForTool(
+    ctx,
+    vfRoot ? readActiveBusDomainCode(vfRoot) : undefined,
+    'VF busDomainCode',
+  );
+  if (vfDomain) return vfDomain;
+
+  const configured = tryMetadataDomainForTool(
+    ctx,
+    ctx.sdk.metadata.configuredDomain(),
+    '.develop MetadataDomain',
+  );
+  if (configured) return configured;
+
+  const domains = await exclusive(ctx, () => ctx.sdk.metadata.listDomains());
+  const codes =
+    domains
+      .map((d) => d.code)
+      .filter((code): code is string => typeof code === 'string' && code.trim().length > 0)
+      .join('、') || '（服务器未返回）';
+  throw new Error(
+    `缺少 domainCode，且 VotaForge server-profiles.json / .develop 均未提供；可用业务域：${codes}`,
+  );
+}
 
 /** 执行一个 MCP 工具，返回可直接 JSON 序列化的结果。 */
 export async function execTool(ctx: McpToolCtx, name: string, a: ToolArg): Promise<unknown> {
@@ -128,6 +192,24 @@ export async function execTool(ctx: McpToolCtx, name: string, a: ToolArg): Promi
         sdk.test.project({ selectClass: a.selectClass as string | undefined }),
       );
       return { total: r.total, passed: r.passed, failed: r.failed, skip: r.skipped, exitCode: r.exitCode };
+    }
+    case 'registerClassRuleFunctions': {
+      const fullClass = requireString(a, 'fullClass');
+      if (!isValidFullClassName(fullClass)) throw new Error(`非法全类名：${fullClass}`);
+      const domain = await resolveMetadataDomainForTool(ctx, a);
+      const r = await write(ctx, () => sdk.metadata.registerFunctions(domain, fullClass));
+      if (!r.success) throw new Error(r.message || '注册失败');
+      return { domain, success: true, count: r.functions?.length ?? 0, functions: r.functions ?? [] };
+    }
+    case 'registerMethodRuleFunction': {
+      const fullClass = requireString(a, 'fullClass');
+      const methodName = requireString(a, 'methodName');
+      if (!isValidFullClassName(fullClass)) throw new Error(`非法全类名：${fullClass}`);
+      if (!isValidMethodName(methodName)) throw new Error(`非法方法名：${methodName}`);
+      const domain = await resolveMetadataDomainForTool(ctx, a);
+      const r = await write(ctx, () => sdk.metadata.registerFunction(domain, fullClass, methodName));
+      if (!r.success) throw new Error(r.message || '注册失败');
+      return { domain, success: true, count: r.functions?.length ?? 0, functions: r.functions ?? [] };
     }
     case 'redirect': {
       await write(ctx, async () => {

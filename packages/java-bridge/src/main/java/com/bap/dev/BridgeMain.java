@@ -2,6 +2,8 @@ package com.bap.dev;
 
 import bap.java.CJavaCenterIntf;
 import bap.java.CJavaFolderDto;
+import cell.panelxpro.metadata.IPanelMetadataService;
+import com.bap.dev.service.MetadataRpcClient;
 import com.cdao.CDaoConst;
 import com.cdao.mgr.CSession;
 import com.leavay.common.gson.Gson;
@@ -51,6 +53,20 @@ import java.util.logging.Logger;
  */
 public class BridgeMain {
     private static final Logger LOG = Logger.getLogger(BridgeMain.class.getName());
+
+    /** MetadataDomain 专用 RPC 连接；与主连接共享 CRpcAdapter/全局会话，不单独登录。 */
+    private static MetadataRpcClient metadata;
+
+    private static void resetMetadata() {
+        if (metadata != null) {
+            try {
+                metadata.shutdown();
+            } catch (Throwable ignore) {
+                // 关闭失败不影响主流程
+            }
+            metadata = null;
+        }
+    }
 
     /**
      * byte[] 的 JSON 表示：显式使用<b>标准 base64</b>（RFC 4648，含 + / 与 = 填充）。
@@ -154,6 +170,7 @@ public class BridgeMain {
         }
 
         // stdin EOF：清理并退出，防止 TS 意外关闭后 Java 进程残留
+        resetMetadata();
         client.shutdown();
         System.exit(0);
     }
@@ -161,6 +178,7 @@ public class BridgeMain {
     private static void dispatch(BapRpcClient client, Req req) throws Exception {
         switch (req.method) {
             case "connect": {
+                resetMetadata();
                 String uri = str(req.params, 0);
                 String user = str(req.params, 1);
                 String pwd = str(req.params, 2);
@@ -227,7 +245,8 @@ public class BridgeMain {
                             uuid, client.getUri(), at, client.getUser(), client.getPwd());
                     Files.write(new File(dest, ".develop").toPath(), xml.getBytes(StandardCharsets.UTF_8));
 
-                    writeOk(req.id, "{\"destDir\":\"" + destDir + "\"}");
+                    // GSON 转义路径中的反斜杠/引号（Windows 路径直接拼接会破坏 JSON 协议帧）
+                    writeOk(req.id, "{\"destDir\":" + GSON.toJson(destDir) + "}");
                 } finally {
                     // 无论成功/取消/异常，都清理临时 zip
                     if (tmpZip.exists()) tmpZip.delete();
@@ -235,6 +254,7 @@ public class BridgeMain {
                 break;
             }
             case "disconnect": {
+                resetMetadata();
                 client.shutdown();
                 writeOk(req.id, "{\"disconnected\":true}");
                 break;
@@ -244,14 +264,125 @@ public class BridgeMain {
                 break;
             }
             case "shutdown": {
+                resetMetadata();
                 client.shutdown();
                 writeOk(req.id, "{\"shutdown\":true}");
                 OUT.flush();
                 System.exit(0);
                 break;
             }
+            case "metadata": {
+                handleMetadata(client, req);
+                break;
+            }
             default:
                 writeErr(req.id, "unknown_method", req.method);
+        }
+    }
+
+    /**
+     * MetadataDomain 操作：connect / call / ping / disconnect。
+     *
+     * <p>元数据连接与主连接共享 {@link CRpcAdapter} 与全局会话，不单独登录；
+     * connect 时复用主连接的 uri/user/pwd（参数可覆盖 uri，但必须与主连接一致）。
+     * 所有实际调用都紧邻 {@link CRpcAdapter#setTempTimeout} 设置超时（只对下一次调用生效）。
+     */
+    private static void handleMetadata(BapRpcClient client, Req req) throws Exception {
+        String op = str(req.params, 0);
+        if (op == null) {
+            writeErr(req.id, "bad_params", "metadata op required");
+            return;
+        }
+
+        switch (op) {
+            case "connect": {
+                if (client.getUri() == null) {
+                    throw new IllegalStateException("bridge not connected; call connect() first");
+                }
+                String uri = str(req.params, 1);
+                if (uri == null || uri.isEmpty()) uri = client.getUri();
+                if (!uri.equals(client.getUri())) {
+                    throw new IllegalArgumentException("metadata uri must match main connection: " + client.getUri());
+                }
+                String user = str(req.params, 2);
+                String pwd = str(req.params, 3);
+                if (user == null) user = client.getUser();
+                if (pwd == null) pwd = client.getPwd();
+
+                resetMetadata();
+                MetadataRpcClient m = new MetadataRpcClient();
+                try {
+                    m.connect(uri, user, pwd);
+                    // getService() 只编译本地代理，不发远程包；调用 ping() 才能确认
+                    // 服务器确实暴露 IPanelMetadataService（失败立即返回 SERVICE_UNAVAILABLE）。
+                    m.getService().ping();
+                    metadata = m;
+                } catch (Throwable t) {
+                    try { m.shutdown(); } catch (Throwable ignore) { }
+                    throw t;
+                }
+                writeOk(req.id, "true");
+                return;
+            }
+            case "call": {
+                String method = str(req.params, 1);
+                if (method == null) {
+                    writeErr(req.id, "bad_params", "metadata method required");
+                    return;
+                }
+                if (metadata == null) throw new IllegalStateException("metadata not connected");
+                Object[] args = req.params.length > 2 ? asArray(req.params[2]) : new Object[0];
+                IPanelMetadataService svc = metadata.getService(); // 先取代理，再设超时
+
+                Object result;
+                switch (method) {
+                    case "listDomains": {
+                        CRpcAdapter.setTempTimeout(120_000L);
+                        result = svc.listDomains();
+                        break;
+                    }
+                    case "listFunctions": {
+                        String domain = str(args, 0);
+                        CRpcAdapter.setTempTimeout(120_000L);
+                        result = svc.listFunctions(domain);
+                        break;
+                    }
+                    case "registerFunction": {
+                        String domain = str(args, 0);
+                        String className = str(args, 1);
+                        String methodName = str(args, 2);
+                        CRpcAdapter.setTempTimeout(600_000L);
+                        result = svc.registerFunction(domain, className, methodName);
+                        break;
+                    }
+                    case "registerFunctions": {
+                        String domain = str(args, 0);
+                        String className = str(args, 1);
+                        CRpcAdapter.setTempTimeout(600_000L);
+                        result = svc.registerFunctions(domain, className);
+                        break;
+                    }
+                    case "ping": {
+                        result = svc.ping();
+                        break;
+                    }
+                    default:
+                        throw new IllegalArgumentException("unknown metadata method: " + method);
+                }
+                writeOk(req.id, safeSerialize(result));
+                return;
+            }
+            case "ping": {
+                writeOk(req.id, Boolean.toString(metadata != null && metadata.ping()));
+                return;
+            }
+            case "disconnect": {
+                resetMetadata();
+                writeOk(req.id, "true");
+                return;
+            }
+            default:
+                writeErr(req.id, "bad_params", "unknown metadata op: " + op);
         }
     }
 
@@ -413,8 +544,10 @@ public class BridgeMain {
 
     private static void writeErr(long id, String name, String message) {
         synchronized (OUT_LOCK) {
-            String msg = message == null ? "" : message.replace("\"", "\\\"");
-            OUT.println("{\"id\":" + id + ",\"ok\":false,\"error\":{\"name\":\"" + name + "\",\"message\":\"" + msg + "\"}}");
+            String n = name == null ? "UNKNOWN" : name;
+            String m = message == null ? "" : message;
+            OUT.println("{\"id\":" + id + ",\"ok\":false,\"error\":{\"name\":"
+                    + GSON.toJson(n) + ",\"message\":" + GSON.toJson(m) + "}}");
         }
     }
 

@@ -133,6 +133,7 @@ export function activateBackendProjects(opts: ActivateBackendProjectsOptions): A
             iconDir: opts.iconDir,
             autoRefresh: opts.autoRefresh,
             ownsPath: (fsPath) => registry.ownsPath(ctx.projectId, fsPath),
+            autoRefreshRunner: (fn) => ctx.runExclusive(fn),
             onChanges: (changes) => {
               fileDeco.setStatuses(
                 new Map(

@@ -9,7 +9,7 @@ export type JsonValue =
   | JsonValue[]
   | { [k: string]: JsonValue };
 
-export type BridgeMethod = 'connect' | 'call' | 'disconnect' | 'ping' | 'shutdown';
+export type BridgeMethod = 'connect' | 'call' | 'download' | 'disconnect' | 'ping' | 'shutdown' | 'metadata';
 
 export interface RpcRequest {
   id: number;

@@ -83,6 +83,33 @@ export class RpcClient {
     return this._proc.request('call', [method, args], timeoutMs) as Promise<T>;
   }
 
+  /**
+   * MetadataDomain 专用连接（与主连接共享 adapter/全局会话，Java 侧不登录）。
+   * 首次 getIntf 会打开服务，留足握手时间，默认 180s。
+   */
+  metadataConnect(uri: string, user: string, pwd: string, timeoutMs = 180_000): Promise<JsonValue> {
+    this.ensureStarted();
+    return this._proc.request('metadata', ['connect', uri, user, pwd], timeoutMs);
+  }
+
+  /** MetadataDomain 原子方法转发；timeoutMs 由调用方按操作选择（list 150s / register 720s）。 */
+  metadataCall<T = JsonValue>(method: string, args: JsonValue[], timeoutMs: number): Promise<T> {
+    this.ensureStarted();
+    return this._proc.request('metadata', ['call', method, args], timeoutMs) as Promise<T>;
+  }
+
+  /** MetadataDomain 连接存活探测。 */
+  metadataPing(): Promise<boolean> {
+    this.ensureStarted();
+    return this._proc.request('metadata', ['ping'], 15_000) as Promise<boolean>;
+  }
+
+  /** 关闭 MetadataDomain 连接（主连接与 Java 进程保留）。 */
+  async metadataDisconnect(): Promise<void> {
+    if (this._closed || !this._proc.active) return;
+    await this._proc.request('metadata', ['disconnect'], 10_000);
+  }
+
   /** 订阅进度事件（Java 桥 download 期间推送）。返回退订函数。 */
   onProgress(cb: (p: { percent: number; message: string }) => void): () => void {
     this._progressHandlers.push(cb);

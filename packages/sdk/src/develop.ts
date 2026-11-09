@@ -16,8 +16,10 @@ export class SdkError extends Error {
 }
 
 const ENTRY_RE = /<entry\s+key=["']([^"']+)["']\s*>(.*?)<\/entry>/gi;
-// 属性格式：全局匹配每个 属性="值"，不锚定标签开头（避免一次逻辑消费整行只抓第一个属性）
-const ATTR_RE = /(?:^|[^A-Za-z])(Project|Uri|User|Password|AdminTool|LocalNioPort)\s*=\s*["']([^"']*)["']/gi;
+// 属性格式：只扫描 <Development ...> 标签内部，避免把 entry 文本里的
+// `MetadataDomain="FAKE"` 误当属性；分别匹配双/单引号值，值内可含另一种引号。
+const DEV_TAG_RE = /<\s*Development\b((?:"[^"]*"|'[^']*'|[^>])*)>/gi;
+const ATTR_PAIR_RE = /([A-Za-z_][A-Za-z0-9_.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 
 function stripComments(xml: string): string {
   return xml
@@ -55,13 +57,17 @@ const KEY_MAP: Record<string, keyof DevelopConfig> = {
   admintool: 'adminTool',
   tool: 'adminTool',
   localnioport: 'localNioPort',
+  metadatadomain: 'metadataDomain',
 };
 
 function normalizeToConfig(pairs: Array<[string, string]>): DevelopConfig {
   const cfg: Partial<DevelopConfig> = {};
   for (const [rawKey, value] of pairs) {
     const key = KEY_MAP[rawKey.toLowerCase()];
-    if (key) cfg[key] = value.trim();
+    if (!key) continue;
+    // MetadataDomain 只做只读兼容：空值视为未配置，不参与域解析。
+    if (key === 'metadataDomain' && !value.trim()) continue;
+    cfg[key] = value.trim();
   }
   if (!cfg.projectUuid) throw new SdkError('配置缺少 Project（projectUuid）', 'CONFIG_INCOMPLETE');
   if (!cfg.uri) throw new SdkError('配置缺少 Uri（服务器地址）', 'CONFIG_INCOMPLETE');
@@ -88,9 +94,15 @@ export function loadDevelop(workspaceRoot: string): DevelopConfig {
     pairs.push([m[1], decodeEntities(m[2] ?? '')]);
   }
   // 形式 B：<Development Project=... Uri=... />
-  ATTR_RE.lastIndex = 0;
-  while ((m = ATTR_RE.exec(cleaned)) !== null) {
-    pairs.push([m[1], decodeEntities(m[2] ?? '')]);
+  let tag: RegExpExecArray | null;
+  DEV_TAG_RE.lastIndex = 0;
+  while ((tag = DEV_TAG_RE.exec(cleaned)) !== null) {
+    const body = tag[1] ?? '';
+    ATTR_PAIR_RE.lastIndex = 0;
+    while ((m = ATTR_PAIR_RE.exec(body)) !== null) {
+      const value = m[2] !== undefined ? m[2] : (m[3] ?? '');
+      pairs.push([m[1], decodeEntities(value)]);
+    }
   }
 
   if (pairs.length === 0) {
@@ -99,13 +111,29 @@ export function loadDevelop(workspaceRoot: string): DevelopConfig {
   return normalizeToConfig(pairs);
 }
 
+/**
+ * 读取旧 .develop 中已有的 MetadataDomain（只读兼容）。
+ * 文件缺失/格式不完整时视为无域：绝不新增、绝不删除、绝不清空。
+ */
+function readExistingMetadataDomain(workspaceRoot: string): string | undefined {
+  try {
+    const domain = loadDevelop(workspaceRoot).metadataDomain?.trim();
+    return domain || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 写入 .develop（Java 同款单标签属性格式）。会覆盖原文件，请先确认意图。 */
 export function writeDevelop(
   workspaceRoot: string,
   cfg: { projectUuid: string; uri: string; user: string; pwd: string; adminTool?: string; localNioPort?: string },
 ): void {
+  // 覆盖写会保留原文件已有的 MetadataDomain（旧 IDEA 配置），本插件绝不新增/删除/清空该字段。
+  const existingDomain = readExistingMetadataDomain(workspaceRoot);
+  const domainAttr = existingDomain ? ` MetadataDomain="${encodeEntities(existingDomain)}"` : '';
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>\n\n` +
-    `<Development Project="${encodeEntities(cfg.projectUuid)}" Uri="${encodeEntities(cfg.uri)}" AdminTool="${encodeEntities(cfg.adminTool ?? 'bap.client.BapMainFrame')}" User="${encodeEntities(cfg.user)}" Password="${encodeEntities(cfg.pwd)}" LocalNioPort="-1"/>`;
+    `<Development Project="${encodeEntities(cfg.projectUuid)}" Uri="${encodeEntities(cfg.uri)}" AdminTool="${encodeEntities(cfg.adminTool ?? 'bap.client.BapMainFrame')}" User="${encodeEntities(cfg.user)}" Password="${encodeEntities(cfg.pwd)}" LocalNioPort="-1"${domainAttr}/>`;
   fs.writeFileSync(path.join(workspaceRoot, '.develop'), xml, 'utf8');
 }

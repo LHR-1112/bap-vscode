@@ -149,6 +149,16 @@
         "category": "BAP"
       },
       {
+        "command": "bapIde.metadata.registerClassFunctions",
+        "title": "Register Class Rule Functions",
+        "category": "BAP"
+      },
+      {
+        "command": "bapIde.metadata.registerMethodFunction",
+        "title": "Register Method Rule Function",
+        "category": "BAP"
+      },
+      {
         "command": "bapIde.checkUpdate",
         "title": "Check Update",
         "category": "BAP"
@@ -372,6 +382,16 @@
         {
           "command": "bapIde.scm.testProject",
           "group": "compile@1",
+          "when": "resourceLangId == java && bapIde.hasBackendProject"
+        },
+        {
+          "command": "bapIde.metadata.registerMethodFunction",
+          "group": "bap@1",
+          "when": "resourceLangId == java && bapIde.hasBackendProject"
+        },
+        {
+          "command": "bapIde.metadata.registerClassFunctions",
+          "group": "bap@2",
           "when": "resourceLangId == java && bapIde.hasBackendProject"
         }
       ]

@@ -91,6 +91,10 @@ export function ipcTimeoutForTool(toolName: string): number {
     case 'downloadProject':
     case 'publish':
     case 'testProject':
+    // 规则函数注册：SDK 超时 12 min（Java 10 min），加上可能的 listDomains 回退，
+    // IPC 必须显著更长，否则 AI 调用会在宿主返回前被误判为超时。
+    case 'registerClassRuleFunctions':
+    case 'registerMethodRuleFunction':
       return 30 * MINUTE;
     case 'compileProject':
     case 'updateLibs':

@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { BackendProjectDescriptor } from '../src/projects/discovery';
 import { buildWorkspaceInfo, sanitizeServerUri } from '../src/projects/workspace-info';
-import { BOOTSTRAP_TOOL_NAMES } from '../src/mcp/tools';
+import { BAP_TOOLS, BOOTSTRAP_TOOL_NAMES } from '../src/mcp/tools';
 
 let tmp: string;
 
@@ -84,7 +84,7 @@ describe('buildWorkspaceInfo', () => {
     expect(info.mcp.reloadRequired).toBe(false);
   });
 
-  it('1 个已注册工程 → full，18 个工具', () => {
+  it(`1 个已注册工程 → full，${BAP_TOOLS.length} 个工具`, () => {
     const d = descriptor({ projectId: 'wf:p1', displayName: 'P1' });
     const info = buildWorkspaceInfo({
       workspaceFolders: [{ name: 'wf', fsPath: tmp }],
@@ -92,7 +92,7 @@ describe('buildWorkspaceInfo', () => {
       registeredProjectIds: new Set(['wf:p1']),
     });
     expect(info.mcp.mode).toBe('full');
-    expect(info.mcp.tools).toHaveLength(18);
+    expect(info.mcp.tools).toHaveLength(BAP_TOOLS.length);
     expect(info.mcp.reloadRequired).toBe(false);
     expect(info.projects[0]).toMatchObject({
       projectId: 'wf:p1',

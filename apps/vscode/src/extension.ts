@@ -138,8 +138,10 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   // Java 桥子进程 launch（下载工程在无打开的工作区时也可用）
+  // bridge-main.jar 显式放第一项：平台 jar 的通配符展开顺序不保证，避免未来同名类遮蔽桥内类。
+  const bridgeLib = path.join(context.extensionPath, 'assets', 'bridge', 'lib');
   const launch: BridgeLaunchConfig = {
-    classpath: [path.join(context.extensionPath, 'assets', 'bridge', 'lib', '*')],
+    classpath: [path.join(bridgeLib, 'bridge-main.jar'), path.join(bridgeLib, '*')],
     mainClass: 'com.bap.dev.BridgeMain',
   };
 

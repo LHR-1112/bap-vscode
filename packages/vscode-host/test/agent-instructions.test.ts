@@ -1,6 +1,7 @@
 // 生成的 CLAUDE.md / AGENTS.md 内容：多工程、引导模式、skill 安装与 vf 路由声明（P1-9/P1-12）。
 import { describe, it, expect } from 'vitest';
 import { buildAgentFileContent, type AgentProjectInfo } from '../src/agent/agent-instructions';
+import { BAP_TOOLS } from '../src/mcp/tools';
 
 const info: AgentProjectInfo = {
   projectName: 'demo',
@@ -9,7 +10,7 @@ const info: AgentProjectInfo = {
 };
 
 describe('buildAgentFileContent', () => {
-  it('列出 18 个 MCP 工具与 workspaceInfo', () => {
+  it(`列出 ${BAP_TOOLS.length} 个 MCP 工具与 workspaceInfo`, () => {
     const text = buildAgentFileContent(info);
     for (const name of [
       'workspaceInfo',
@@ -20,10 +21,12 @@ describe('buildAgentFileContent', () => {
       'redirect',
       'compileProject',
       'testProject',
+      'registerClassRuleFunctions',
+      'registerMethodRuleFunction',
     ]) {
       expect(text).toContain(`\`${name}\``);
     }
-    expect(text).toContain('18');
+    expect(text).toContain(String(BAP_TOOLS.length));
   });
 
   it('说明 project 参数、歧义候选与返回 envelope', () => {

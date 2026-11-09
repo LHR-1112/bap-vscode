@@ -25,6 +25,53 @@ export interface DevelopConfig {
   pwd: string;
   adminTool?: string;
   localNioPort?: string;
+  /** 只读兼容：旧 .develop 可能由 IDEA 写入；本插件绝不写。 */
+  metadataDomain?: string;
+}
+
+/** 元数据业务域（IPanelMetadataService.listDomains）。 */
+export interface DomainInfoDto {
+  code?: string;
+  name?: string;
+  description?: string;
+}
+
+/** 规则函数入参元数据。 */
+export interface InputParamMeta {
+  name?: string;
+  type?: string;
+  desc?: string;
+  nullable?: boolean;
+}
+
+/** 规则函数元数据。 */
+export interface RuleFunctionMeta {
+  ruleCode?: string;
+  nameSpace?: string;
+  name?: string;
+  tag?: string;
+  description?: string;
+  codePath?: string;
+  invokeMethod?: string;
+  inputParamMetas?: InputParamMeta[];
+  returnType?: string;
+  useCase?: string;
+  customLabels?: string[];
+}
+
+/** 注册函数返回。 */
+export interface RegisterFunctionResult {
+  success: boolean;
+  message?: string;
+  functions?: RuleFunctionMeta[];
+}
+
+/** 列出域内函数返回。 */
+export interface ListFunctionsResult {
+  functions?: RuleFunctionMeta[];
+  functionNames?: string[];
+  errorFunctions?: Record<string, string>;
+  totalCount?: number;
 }
 
 /** 云端 Java 文件快照（FileDto 子集 + fullClass）。 */

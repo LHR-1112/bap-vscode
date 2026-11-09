@@ -20,7 +20,10 @@ async function main() {
 
   const repoRoot = path.resolve(__dirname, '..', '..', '..');
   const distLib = path.join(repoRoot, 'packages', 'java-bridge', 'dist', 'lib');
-  const launch: BridgeLaunchConfig = { classpath: [path.join(distLib, '*')], mainClass: 'com.bap.dev.BridgeMain' };
+  const launch: BridgeLaunchConfig = {
+    classpath: [path.join(distLib, 'bridge-main.jar'), path.join(distLib, '*')],
+    mainClass: 'com.bap.dev.BridgeMain',
+  };
 
   // 阶段 A：拿一个真实工程 uuid
   let projectUuid: string;

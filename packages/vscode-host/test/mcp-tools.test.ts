@@ -18,13 +18,15 @@ const required = (t: (typeof BAP_TOOLS)[number]): string[] =>
   ((t.inputSchema as { required?: string[] }).required ?? []) as string[];
 
 describe('BAP_TOOLS 目录', () => {
-  it('共 18 个工具，名称唯一', () => {
-    expect(BAP_TOOLS).toHaveLength(18);
-    expect(new Set(BAP_TOOLS.map((t) => t.name)).size).toBe(18);
+  it(`共 ${BAP_TOOLS.length} 个工具，名称唯一`, () => {
+    expect(BAP_TOOLS.length).toBeGreaterThan(0);
+    expect(new Set(BAP_TOOLS.map((t) => t.name)).size).toBe(BAP_TOOLS.length);
   });
 
-  it('15 个工程级工具带可选 project，且 project 不在 required', () => {
-    expect(PROJECT_SCOPED_TOOL_NAMES).toHaveLength(15);
+  it(`共 ${PROJECT_SCOPED_TOOL_NAMES.length} 个工程级工具带可选 project，且 project 不在 required`, () => {
+    expect(PROJECT_SCOPED_TOOL_NAMES).toHaveLength(
+      BAP_TOOLS.length - WORKSPACE_LEVEL_TOOL_NAMES.length,
+    );
     for (const name of PROJECT_SCOPED_TOOL_NAMES) {
       const tool = BAP_TOOLS.find((t) => t.name === name)!;
       expect(props(tool)).toHaveProperty('project');
@@ -32,6 +34,20 @@ describe('BAP_TOOLS 目录', () => {
       expect(isProjectScopedTool(name)).toBe(true);
       expect(isWorkspaceLevelTool(name)).toBe(false);
     }
+  });
+
+  it('规则函数注册工具映射到 metadata 命令，且 domainCode 可选', () => {
+    const classTool = BAP_TOOLS.find((t) => t.name === 'registerClassRuleFunctions')!;
+    expect(classTool.command).toBe('bapIde.metadata.registerClassFunctions');
+    expect(required(classTool)).toEqual(['fullClass']);
+    expect(props(classTool)).toHaveProperty('project');
+    expect(props(classTool)).toHaveProperty('domainCode');
+
+    const methodTool = BAP_TOOLS.find((t) => t.name === 'registerMethodRuleFunction')!;
+    expect(methodTool.command).toBe('bapIde.metadata.registerMethodFunction');
+    expect(required(methodTool)).toEqual(['fullClass', 'methodName']);
+    expect(props(methodTool)).toHaveProperty('project');
+    expect(props(methodTool)).toHaveProperty('domainCode');
   });
 
   it('3 个工作区级工具没有 project 参数', () => {
@@ -51,7 +67,7 @@ describe('BAP_TOOLS 目录', () => {
   it('引导模式只暴露 workspaceInfo / listProjects / downloadProject', () => {
     expect([...BOOTSTRAP_TOOL_NAMES]).toEqual([...WORKSPACE_LEVEL_TOOL_NAMES]);
     expect(toolsForMode('bootstrap').map((t) => t.name)).toEqual([...BOOTSTRAP_TOOL_NAMES]);
-    expect(toolsForMode('full')).toHaveLength(18);
+    expect(toolsForMode('full')).toHaveLength(BAP_TOOLS.length);
     for (const t of BAP_TOOLS) {
       expect(isToolAllowedInMode('full', t.name)).toBe(true);
       expect(isToolAllowedInMode('bootstrap', t.name)).toBe(

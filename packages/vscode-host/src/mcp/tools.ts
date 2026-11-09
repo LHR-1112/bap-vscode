@@ -63,6 +63,27 @@ export const BAP_TOOLS: IpTool[] = [
   T('compileFile', '云端编译单个 Java 类，返回诊断。', obj({ project: P, fullClass: S('点分全类名'), code: S('源码') }, ['fullClass', 'code']), 'bapIde.scm.compileFile'),
   T('debugClass', '把单个类放云端运行，返回结果。', obj({ project: P, fullClass: S('点分全类名'), code: S('源码') }, ['fullClass', 'code']), 'bapIde.scm.debugClass'),
   T('testProject', '本地编译并运行单元测试。', obj({ project: P, selectClass: S('只跑指定类') }), 'bapIde.scm.testProject'),
+  T(
+    'registerClassRuleFunctions',
+    '把指定 Java 类的全部方法注册为 BAP 规则函数（云端写操作）。服务端按云端已提交代码扫描，未提交改动不生效；目标方法需带 @MethodDeclare 与 @FuncDeclare 注解。domainCode 缺省时使用 VotaForge server-profiles.json 当前 profile 的 busDomainCode（其次 .develop 的 MetadataDomain）；都没有会报错并返回可用业务域。',
+    obj({
+      project: P,
+      fullClass: S('Java 点分全类名'),
+      domainCode: S('业务域 code；缺省用 VF busDomainCode / .develop MetadataDomain'),
+    }, ['fullClass']),
+    'bapIde.metadata.registerClassFunctions',
+  ),
+  T(
+    'registerMethodRuleFunction',
+    '把指定 Java 类的某个方法注册为 BAP 规则函数（云端写操作）。服务端按云端已提交代码扫描，未提交改动不生效；目标方法需带 @MethodDeclare 与 @FuncDeclare 注解。domainCode 缺省时使用 VotaForge server-profiles.json 当前 profile 的 busDomainCode（其次 .develop 的 MetadataDomain）；都没有会报错并返回可用业务域。',
+    obj({
+      project: P,
+      fullClass: S('Java 点分全类名'),
+      methodName: S('方法名'),
+      domainCode: S('业务域 code；缺省用 VF busDomainCode / .develop MetadataDomain'),
+    }, ['fullClass', 'methodName']),
+    'bapIde.metadata.registerMethodFunction',
+  ),
   T('redirect', '把目标工程重定向到另一 BAP 服务器（改写 .develop 并重连刷新）。', obj({ project: P, uri: S('ws 地址'), user: S('账号'), pwd: S('密码'), projectUuid: S('目标工程'), projectName: S('目标工程名') }, ['uri', 'user', 'pwd', 'projectUuid']), 'bapIde.scm.redirect'),
   T(
     'downloadProject',

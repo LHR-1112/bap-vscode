@@ -1,5 +1,6 @@
 // MCP IPC 错误协议（结构化错误 + 超时映射）。
 import { describe, it, expect } from 'vitest';
+import { METADATA_REGISTER_TIMEOUT_MS } from '@bap/sdk';
 import {
   isIpcToolError,
   toIpcToolError,
@@ -104,7 +105,13 @@ describe('IpcToolCallError', () => {
 
 describe('ipcTimeoutForTool', () => {
   it('长耗时工具放宽到 30 / 10 / 5 分钟', () => {
-    for (const name of ['downloadProject', 'publish', 'testProject']) {
+    for (const name of [
+      'downloadProject',
+      'publish',
+      'testProject',
+      'registerClassRuleFunctions',
+      'registerMethodRuleFunction',
+    ]) {
       expect(ipcTimeoutForTool(name)).toBe(30 * 60_000);
     }
     for (const name of ['compileProject', 'updateLibs']) {
@@ -112,6 +119,12 @@ describe('ipcTimeoutForTool', () => {
     }
     for (const name of ['redirect', 'listProjects', 'commit', 'updateAll']) {
       expect(ipcTimeoutForTool(name)).toBe(5 * 60_000);
+    }
+  });
+
+  it('规则函数注册的 IPC 超时严格大于 SDK 注册超时', () => {
+    for (const name of ['registerClassRuleFunctions', 'registerMethodRuleFunction']) {
+      expect(ipcTimeoutForTool(name)).toBeGreaterThan(METADATA_REGISTER_TIMEOUT_MS);
     }
   });
 

@@ -2,6 +2,7 @@
 // 供「Reset Agent Instructions」命令：收集当前工程信息 → 拼装 markdown → 写入根目录 CLAUDE.md / AGENTS.md。
 import * as fs from 'fs';
 import * as path from 'path';
+import { BAP_TOOLS } from '../mcp/tools';
 
 export interface AgentProjectInfo {
   projectName: string;
@@ -80,7 +81,7 @@ export function buildAgentFileContent(
     '',
     '## 云工程能力（MCP 工具）',
     '',
-    '本插件通过 MCP server（id=`bap`）把云工程能力暴露为 AI 工具（共 18 个；严格映射：一 tool ↔ 一 `bapIde.*` 命令）：',
+    `本插件通过 MCP server（id=\`bap\`）把云工程能力暴露为 AI 工具（共 ${BAP_TOOLS.length} 个；严格映射：一 tool ↔ 一 \`bapIde.*\` 命令）：`,
     '',
     '- `workspaceInfo` 工作区/工程概览（多工程时先调用，获取 `project` 可用值）',
     '- `refresh` 刷新（对比本地/云端）',
@@ -91,6 +92,7 @@ export function buildAgentFileContent(
     '- `updateLibs` 同步依赖',
     '- `compileProject` 本地编译 / `compileFile` 云端编译单类',
     '- `debugClass` 云端调试 / `testProject` 单元测试',
+    '- `registerClassRuleFunctions` 注册类规则函数 / `registerMethodRuleFunction` 注册方法规则函数',
     '- `redirect` 重定向 / `downloadProject` 下载工程',
     '- `listProjects` 项目列表 / `fetchCurrent` 取云端当前文件',
     '',
@@ -99,6 +101,9 @@ export function buildAgentFileContent(
     '',
     '工程级工具成功时返回 `{ project: { projectId, displayName, root }, result }`；`workspaceInfo` /',
     '`listProjects` / `downloadProject` 为工作区级工具，不包该结构。',
+    '',
+    '规则函数注册是云端写操作：服务端按云端已提交代码扫描，未提交改动不生效；目标方法需带 `@MethodDeclare` 与 `@FuncDeclare`。',
+    '`domainCode` 缺省时用 VotaForge active profile 的 `busDomainCode`，其次 `.develop` 的 `MetadataDomain`；都没有会报错并返回可用业务域。',
     '',
     'MCP 已随 `Reset Agent Instructions` 配置到 Claude Code（工程根 `.mcp.json`）与 Codex（工程根 `.codex/config.toml`）；配置后重启对应客户端即可调用上述工具。',
     '注意：配置写在**当前后端工程根**。若 AI 客户端从 VotaForge 根启动，可能读取不到该配置——请在客户端项目根另行配置，或从后端工程根启动客户端。',
