@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BAP IDE —— 面向 BAP 云工程的 VS Code 插件。通过 WebSocket RPC 连接 BAP Server，提供登录 / 拉取 / 同步 / 提交 / 发布 / 编译 / 单元测试 / 历史 / 重定位 / 依赖同步 / Jar 扫描等云工程能力。
 
-权威开发规划：`docx/BAP IDE（VS Code）开发规划 V1.0.md`（标题为 V1.1）。
+权威开发规划：`docs/BAP IDE（VS Code）开发规划 V1.0.md`（标题为 V1.1）。
 
 参考实现（Java 版 IDEA/Eclipse 插件源码，RPC 协议以此为准）：`/Users/lihongrui/SynologyDrive/kwaidoo/eclipse_plugin/Plugin`。
 

@@ -1,7 +1,7 @@
 // 后端工程根定位（纯函数，不依赖 vscode，便于单测）。
 //
 // VotaForge 体系中，BAP 是「体系外属主」，后端工程根靠 .develop 标记发现
-// （docx/architecture/workspace-protocol.md §6.1）：一个 workspace 可含 0..N 个
+// （docs/architecture/workspace-protocol.md §6.1）：一个 workspace 可含 0..N 个
 // 后端工程，不能假设「第一个 workspace folder 就是工程根」。
 import * as fs from 'fs';
 import * as path from 'path';

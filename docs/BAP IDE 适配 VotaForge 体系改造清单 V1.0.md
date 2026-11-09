@@ -1,7 +1,7 @@
 # BAP IDE 适配 VotaForge 体系改造清单 V1.0
 
 > 日期：2026-11-05
-> 依据：`docx/architecture/` 下 7 篇体系文档（plugin-split、workspace-protocol、votaforge-bap/lite/frontend/modeling/layout-designer）
+> 依据：`docs/architecture/` 下 7 篇体系文档（plugin-split、workspace-protocol、votaforge-bap/lite/frontend/modeling/layout-designer）
 > 范围：本仓库 `apps/vscode` + `packages/vscode-host` + `packages/sdk`
 > 状态：**M2 实施完成**（本文件随实施更新）
 
